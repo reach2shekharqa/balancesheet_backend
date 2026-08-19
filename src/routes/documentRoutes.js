@@ -4,6 +4,7 @@ import multer from "multer";
 import {
     processDocumentUpload
 } from "../services/documentUploadService.js";
+import { requireAuth } from "../middleware/authMiddleware.js";
 
 
 const router = express.Router();
@@ -16,6 +17,7 @@ const upload = multer({
 
 router.post(
     "/upload",
+    requireAuth,
     upload.single("file"),
     async (req, res) => {
 
@@ -31,8 +33,7 @@ router.post(
             }
 
 
-            const userId =
-                req.body.userId || null;
+            const userId = req.user.userId;
 
 
             const result =

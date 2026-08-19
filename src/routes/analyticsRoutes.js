@@ -5,6 +5,7 @@ import { pool } from "../db/db.js";
 import {
     extractFinancialAnalytics
 } from "../services/financialAnalyticsService.js";
+import { requireAuth } from "../middleware/authMiddleware.js";
 
 
 const router = express.Router();
@@ -21,6 +22,7 @@ function debugAnalyticsLog(...args) {
 
 router.post(
     "/documents/:documentId/analytics",
+    requireAuth,
     async (req, res) => {
 
         console.log(
@@ -79,26 +81,30 @@ router.post(
                 await pool.query(
                     `
                     SELECT
-                        id,
-                        extraction_status,
-                        extraction_payload
-                    FROM documents
-                    WHERE id = $1
+                        d.id,
+                        d.extraction_status,
+                        d.extraction_payload
+                    FROM documents d
+                    INNER JOIN user_documents ud
+                        ON ud.document_id = d.id
+                       AND ud.user_id = $2
+                    WHERE d.id = $1
                     `,
                     [
-                        documentId
+                        documentId,
+                        req.user.userId
                     ]
                 );
 
 
             if (result.rows.length === 0) {
 
-                return res.status(404).json({
+                return res.status(403).json({
 
                     success: false,
 
                     error:
-                        "Document not found."
+                        "You are not authorized to access this document."
 
                 });
 

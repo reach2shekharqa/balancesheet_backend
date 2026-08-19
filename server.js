@@ -1,6 +1,8 @@
 import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
+import authRoutes
+    from "./src/routes/authRoutes.js";
 
 import documentRoutes
     from "./src/routes/documentRoutes.js";
@@ -24,11 +26,17 @@ app.use((req, res, next) => {
 });
 app.use(
     cors({
-        origin: ["http://localhost:5173", "https://balancesheet-frontend.onrender.com"]
+        origin: ["http://localhost:5173", "https://balancesheet-frontend.onrender.com"],
+        credentials: true
     })
 );
 
 app.use(express.json());
+
+app.use(
+    "/api/auth",
+    authRoutes
+);
 
 app.use(
     "/api",
