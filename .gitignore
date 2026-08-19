@@ -54,3 +54,8 @@ build/
 *.key
 *.crt
 debug/
+*.dump
+*.backup
+.env
+.env.*
+!.env.example
