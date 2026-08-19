@@ -14,11 +14,39 @@ const upload = multer({
     dest: "uploads/"
 });
 
+const uploadWithDebug = (req, res, next) => {
+
+    console.log(
+        "[UPLOAD DEBUG] request received"
+    );
+
+    upload.single("file")(req, res, (error) => {
+
+        if (error) {
+
+            return next(error);
+
+        }
+
+        console.log(
+            "[UPLOAD DEBUG] multer completed",
+            {
+                originalFilename: req.file?.originalname,
+                fileSize: req.file?.size,
+                temporaryFilePath: req.file?.path
+            }
+        );
+
+        return next();
+
+    });
+};
+
 
 router.post(
     "/upload",
     requireAuth,
-    upload.single("file"),
+    uploadWithDebug,
     async (req, res) => {
 
         try {
@@ -45,6 +73,10 @@ router.post(
 
                 });
 
+            console.log(
+                "[UPLOAD DEBUG] sending upload response"
+            );
+
 
             return res.json({
 
@@ -57,7 +89,7 @@ router.post(
         } catch (error) {
 
             console.error(
-                "Document upload failed:",
+                "[UPLOAD DEBUG] route error:",
                 error
             );
 

@@ -169,10 +169,18 @@ async function retryFailedDocument({
     );
 
 
+    console.log(
+        "[UPLOAD DEBUG] linking document to user"
+    );
+
     await linkDocumentToUser({
         userId,
         documentId: existingDocument.id
     });
+
+    console.log(
+        "[UPLOAD DEBUG] document linked to user"
+    );
 
 
     const pendingDocument = await pool.query(
@@ -256,13 +264,29 @@ export async function processDocumentUpload({
     userId
 }) {
 
+    console.log(
+        "[UPLOAD DEBUG] processDocumentUpload started"
+    );
+
     /*
      * STEP 1
      * Validate file and calculate SHA-256
      */
 
+    console.log(
+        "[UPLOAD DEBUG] starting file processing"
+    );
+
     const fileInfo =
         await processUploadedFile(file);
+
+    console.log(
+        "[UPLOAD DEBUG] file processing completed",
+        {
+            fileHash: fileInfo.fileHash,
+            filePath: fileInfo.filePath
+        }
+    );
 
 
     /*
@@ -270,10 +294,24 @@ export async function processDocumentUpload({
      * Check global document cache
      */
 
+    console.log(
+        "[UPLOAD DEBUG] checking document cache"
+    );
+
     const cache =
         await checkUploadedDocument(
             fileInfo.filePath
         );
+
+    console.log(
+        "[UPLOAD DEBUG] cache result",
+        {
+            action: cache.action,
+            fileHash: cache.fileHash,
+            documentId: cache.document?.id,
+            extractionStatus: cache.document?.extraction_status
+        }
+    );
 
 
     /*
@@ -284,12 +322,24 @@ export async function processDocumentUpload({
 
     if (cache.action === "REUSE") {
 
+        console.log(
+            "[UPLOAD DEBUG] CACHE REUSE"
+        );
+
         removeUploadedFile(fileInfo.filePath);
+
+        console.log(
+            "[UPLOAD DEBUG] linking document to user"
+        );
 
         await linkDocumentToUser({
             userId,
             documentId: cache.document.id
         });
+
+        console.log(
+            "[UPLOAD DEBUG] document linked to user"
+        );
 
         return {
             action: "REUSE",
@@ -309,10 +359,18 @@ export async function processDocumentUpload({
 
         removeUploadedFile(fileInfo.filePath);
 
+        console.log(
+            "[UPLOAD DEBUG] linking document to user"
+        );
+
         await linkDocumentToUser({
             userId,
             documentId: cache.document.id
         });
+
+        console.log(
+            "[UPLOAD DEBUG] document linked to user"
+        );
 
         return {
             action: "WAIT",
@@ -381,10 +439,18 @@ export async function processDocumentUpload({
      * Always link the current user.
      */
 
+    console.log(
+        "[UPLOAD DEBUG] linking document to user"
+    );
+
     await linkDocumentToUser({
         userId,
         documentId: document.id
     });
+
+    console.log(
+        "[UPLOAD DEBUG] document linked to user"
+    );
 
 
     /*
