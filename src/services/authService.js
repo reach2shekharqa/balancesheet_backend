@@ -179,7 +179,7 @@ export function getAuthCookieOptions() {
     return {
         httpOnly: true,
         secure: isProduction,
-        sameSite: process.env.AUTH_COOKIE_SAME_SITE || (isProduction ? "none" : "lax"),
+        sameSite: isProduction ? "none" : (process.env.AUTH_COOKIE_SAME_SITE || "lax"),
         maxAge: 24 * 60 * 60 * 1000,
         path: "/",
     };

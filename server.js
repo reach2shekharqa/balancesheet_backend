@@ -18,6 +18,15 @@ dotenv.config();
 
 
 const app = express();
+const allowedOrigins = [
+    "http://localhost:5173",
+    "https://balancesheet-frontend.onrender.com",
+    ...(process.env.FRONTEND_URL || "")
+        .split(",")
+        .map(origin => origin.trim())
+        .filter(Boolean),
+];
+
 app.use((req, res, next) => {
     console.log(
         "REQUEST:",
@@ -29,7 +38,7 @@ app.use((req, res, next) => {
 });
 app.use(
     cors({
-        origin: ["http://localhost:5173", "https://balancesheet-frontend.onrender.com"],
+        origin: allowedOrigins,
         credentials: true
     })
 );
