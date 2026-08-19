@@ -3,9 +3,16 @@ import express from "express";
 const router = express.Router();
 
 function normalizeTrendingResponse(payload) {
+    const trendingStocks = payload?.trending_stocks;
     const rows = Array.isArray(payload)
         ? payload
-        : payload?.data ?? payload?.trending ?? payload?.stocks ?? [];
+        : Array.isArray(trendingStocks)
+            ? trendingStocks
+            : [
+                ...(trendingStocks?.top_gainers ?? []),
+                ...(trendingStocks?.top_losers ?? []),
+                ...(trendingStocks?.most_active ?? []),
+            ];
 
     if (!Array.isArray(rows)) {
         return [];
@@ -13,11 +20,11 @@ function normalizeTrendingResponse(payload) {
 
     return rows
         .map(row => ({
-            symbol: row.symbol ?? row.ticker ?? row.tradingSymbol ?? "",
-            name: row.companyName ?? row.name ?? row.company ?? row.symbol ?? "",
+            symbol: row.symbol ?? row.ticker ?? row.ticker_id ?? row.tradingSymbol ?? "",
+            name: row.companyName ?? row.company_name ?? row.name ?? row.company ?? row.symbol ?? "",
             price: row.price ?? row.ltp ?? row.lastPrice ?? null,
-            change: row.change ?? row.changeValue ?? null,
-            changePercent: row.changePercent ?? row.pChange ?? row.percentChange ?? null,
+            change: row.change ?? row.changeValue ?? row.net_change ?? null,
+            changePercent: row.changePercent ?? row.pChange ?? row.percentChange ?? row.percent_change ?? null,
         }))
         .filter(row => row.symbol || row.name)
         .slice(0, 20);
