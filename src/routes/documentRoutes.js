@@ -16,13 +16,68 @@ const upload = multer({
 
 const uploadWithDebug = (req, res, next) => {
 
+    const uploadStartedAt = Date.now();
+    let uploadCompleted = false;
+    let requestClosedLogged = false;
+
+    const elapsedMilliseconds = () =>
+        Date.now() - uploadStartedAt;
+
+    const logRequestClosed = () => {
+
+        if (uploadCompleted || requestClosedLogged) {
+
+            return;
+
+        }
+
+        requestClosedLogged = true;
+
+        console.error(
+            "[UPLOAD DEBUG] request closed before upload completed",
+            {
+                elapsedMilliseconds: elapsedMilliseconds()
+            }
+        );
+
+    };
+
+    const longUploadTimer = setTimeout(() => {
+
+        if (!uploadCompleted) {
+
+            console.warn(
+                "[UPLOAD DEBUG] upload stage unusually long",
+                {
+                    elapsedMilliseconds: elapsedMilliseconds()
+                }
+            );
+
+        }
+
+    }, 30000);
+
+    req.once("aborted", logRequestClosed);
+    req.once("close", logRequestClosed);
+
     console.log(
         "[UPLOAD DEBUG] request received"
     );
 
     upload.single("file")(req, res, (error) => {
 
+        uploadCompleted = true;
+        clearTimeout(longUploadTimer);
+
         if (error) {
+
+            console.error(
+                "[UPLOAD DEBUG] multer error",
+                {
+                    elapsedMilliseconds: elapsedMilliseconds(),
+                    error: error?.message ?? String(error)
+                }
+            );
 
             return next(error);
 
@@ -31,6 +86,7 @@ const uploadWithDebug = (req, res, next) => {
         console.log(
             "[UPLOAD DEBUG] multer completed",
             {
+                elapsedMilliseconds: elapsedMilliseconds(),
                 originalFilename: req.file?.originalname,
                 fileSize: req.file?.size,
                 temporaryFilePath: req.file?.path
