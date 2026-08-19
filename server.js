@@ -24,7 +24,7 @@ app.use((req, res, next) => {
 });
 app.use(
     cors({
-        origin: "http://localhost:5173"
+        origin: ["http://localhost:5173", "https://balancesheet-frontend.onrender.com"]
     })
 );
 
@@ -68,3 +68,5 @@ app.listen(PORT, () => {
     );
 
 });
+
+
