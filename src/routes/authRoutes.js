@@ -36,7 +36,7 @@ router.post("/register", async (req, res) => {
         }
 
         console.error("Registration failed:", error?.message ?? error);
-        return res.status(500).json({ success: false, error: "Registration failed." });
+        return res.status(500).json({ success: false, error: error?.message ?? String(error), code: error?.code });
     }
 });
 
@@ -70,3 +70,4 @@ router.post("/logout", (req, res) => {
 });
 
 export default router;
+
