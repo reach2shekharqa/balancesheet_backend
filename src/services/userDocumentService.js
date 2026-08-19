@@ -19,7 +19,7 @@ export async function linkDocumentToUser({
         VALUES ($1, $2)
 
         ON CONFLICT (user_id, document_id)
-        DO NOTHING
+        DO UPDATE SET created_at = NOW()
 
         RETURNING
             id,
@@ -74,4 +74,26 @@ export async function linkDocumentToUser({
         created: false,
         relation: existing.rows[0] ?? null
     };
+}
+
+export async function getUserDocuments({ userId }) {
+    const result = await pool.query(
+        `
+        SELECT
+            d.id,
+            d.original_filename,
+            d.file_size_mb,
+            d.extraction_status,
+            d.uploaded_at,
+            ud.created_at AS linked_at
+        FROM user_documents ud
+        INNER JOIN documents d
+            ON d.id = ud.document_id
+        WHERE ud.user_id = $1
+        ORDER BY ud.created_at DESC, d.id DESC
+        `,
+        [userId]
+    );
+
+    return result.rows;
 }

@@ -4,6 +4,7 @@ import multer from "multer";
 import {
     processDocumentUpload
 } from "../services/documentUploadService.js";
+import { getUserDocuments } from "../services/userDocumentService.js";
 import { requireAuth } from "../middleware/authMiddleware.js";
 
 
@@ -97,6 +98,30 @@ const uploadWithDebug = (req, res, next) => {
 
     });
 };
+
+router.get(
+    "/",
+    requireAuth,
+    async (req, res) => {
+        try {
+            const documents = await getUserDocuments({
+                userId: req.user.userId
+            });
+
+            return res.json({
+                success: true,
+                documents
+            });
+        } catch (error) {
+            console.error("Document list failed:", error);
+
+            return res.status(500).json({
+                success: false,
+                error: error?.message ?? String(error)
+            });
+        }
+    }
+);
 
 
 router.post(
