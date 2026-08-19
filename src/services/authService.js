@@ -1,11 +1,13 @@
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
+import { OAuth2Client } from "google-auth-library";
 import jwt from "jsonwebtoken";
 
 import { pool } from "../db/db.js";
 
 const AUTH_COOKIE_NAME = "financial_analyzer_auth";
 const PASSWORD_ROUNDS = 12;
+const googleClient = new OAuth2Client();
 
 function getJwtSecret() {
     const secret = process.env.AUTH_JWT_SECRET;
@@ -66,15 +68,16 @@ export async function registerUser({ userName, email, password }) {
     return result.rows[0];
 }
 
-export async function authenticateUser({ email, password }) {
+export async function authenticateUser({ identifier, email, password }) {
+    const loginIdentifier = identifier ?? email;
     const result = await pool.query(
         `
         SELECT user_id, user_name, email, password, role, is_active, is_deleted
         FROM users
-        WHERE lower(email) = lower($1)
+        WHERE lower(email) = lower($1) OR lower(user_name) = lower($1)
         LIMIT 1
         `,
-        [normalizeEmail(email)]
+        [String(loginIdentifier ?? "").trim()]
     );
 
     const user = result.rows[0];
@@ -84,6 +87,78 @@ export async function authenticateUser({ email, password }) {
 
     const passwordMatches = await bcrypt.compare(password, user.password);
     return passwordMatches ? user : null;
+}
+
+export async function authenticateGoogleUser(credential) {
+    const googleClientId = process.env.GOOGLE_CLIENT_ID;
+    if (!googleClientId) {
+        throw new Error("Google login is not configured.");
+    }
+
+    let payload;
+    try {
+        const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: googleClientId });
+        payload = ticket.getPayload();
+    } catch {
+        const error = new Error("Invalid Google sign-in token.");
+        error.code = "GOOGLE_TOKEN_INVALID";
+        throw error;
+    }
+
+    if (!payload?.email || payload.email_verified !== true) {
+        const error = new Error("Google account email could not be verified.");
+        error.code = "GOOGLE_TOKEN_INVALID";
+        throw error;
+    }
+
+    const email = normalizeEmail(payload.email);
+    const existingUser = await pool.query(
+        `
+        SELECT user_id, user_name, email, password, role, is_active, is_deleted
+        FROM users
+        WHERE lower(email) = $1
+        LIMIT 1
+        `,
+        [email]
+    );
+
+    if (existingUser.rows[0]) {
+        const user = existingUser.rows[0];
+        return user.is_active === false || user.is_deleted === true ? null : user;
+    }
+
+    const generatedPassword = await bcrypt.hash(crypto.randomBytes(32).toString("hex"), PASSWORD_ROUNDS);
+    const fallbackName = email.split("@")[0];
+    const userName = String(payload.name || fallbackName).trim().slice(0, 100) || "Google user";
+    try {
+        const result = await pool.query(
+            `
+            INSERT INTO users (user_id, user_name, email, password, role)
+            VALUES ($1, $2, $3, $4, 'user')
+            RETURNING user_id, user_name, email, password, role, is_active, is_deleted
+            `,
+            [`usr_${crypto.randomUUID()}`, userName, email, generatedPassword]
+        );
+
+        return result.rows[0];
+    } catch (error) {
+        if (error?.code !== "23505") {
+            throw error;
+        }
+
+        const duplicateUser = await pool.query(
+            `
+            SELECT user_id, user_name, email, password, role, is_active, is_deleted
+            FROM users
+            WHERE lower(trim(email)) = $1
+            LIMIT 1
+            `,
+            [email]
+        );
+
+        const user = duplicateUser.rows[0];
+        return user && user.is_active !== false && user.is_deleted !== true ? user : null;
+    }
 }
 
 export function createAuthToken(user) {
@@ -99,10 +174,12 @@ export function verifyAuthToken(token) {
 }
 
 export function getAuthCookieOptions() {
+    const isProduction = process.env.NODE_ENV === "production";
+
     return {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "none",
+        secure: isProduction,
+        sameSite: process.env.AUTH_COOKIE_SAME_SITE || (isProduction ? "none" : "lax"),
         maxAge: 24 * 60 * 60 * 1000,
         path: "/",
     };

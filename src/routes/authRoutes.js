@@ -2,6 +2,7 @@ import express from "express";
 
 import {
     authenticateUser,
+    authenticateGoogleUser,
     createAuthToken,
     getAuthCookieOptions,
     normalizeEmail,
@@ -41,13 +42,14 @@ router.post("/register", async (req, res) => {
 });
 
 router.post("/login", async (req, res) => {
-    const { email, password } = req.body ?? {};
-    if (!email || typeof password !== "string") {
-        return res.status(400).json({ success: false, error: "Email and password are required." });
+    const { email, identifier, password } = req.body ?? {};
+    const loginIdentifier = identifier ?? email;
+    if (!loginIdentifier || typeof password !== "string") {
+        return res.status(400).json({ success: false, error: "Email or username and password are required." });
     }
 
     try {
-        const user = await authenticateUser({ email, password });
+        const user = await authenticateUser({ identifier: loginIdentifier, password });
         if (!user) {
             return res.status(401).json({ success: false, error: "Invalid email or password." });
         }
@@ -57,6 +59,27 @@ router.post("/login", async (req, res) => {
     } catch (error) {
         console.error("Login failed:", error?.message ?? error);
         return res.status(500).json({ success: false, error: "Login failed." });
+    }
+});
+
+router.post("/google", async (req, res) => {
+    const { credential } = req.body ?? {};
+    if (!credential || typeof credential !== "string") {
+        return res.status(400).json({ success: false, error: "Google sign-in credential is required." });
+    }
+
+    try {
+        const user = await authenticateGoogleUser(credential);
+        if (!user) {
+            return res.status(401).json({ success: false, error: "This account is not active." });
+        }
+
+        setAuthCookie(res, user);
+        return res.json({ success: true, user: toPublicUser(user) });
+    } catch (error) {
+        const status = error?.code === "GOOGLE_TOKEN_INVALID" ? 401 : 500;
+        console.error("Google login failed:", error?.message ?? error);
+        return res.status(status).json({ success: false, error: error?.message ?? "Google login failed." });
     }
 });
 
