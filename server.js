@@ -10,6 +10,9 @@ import documentRoutes
 import analyticsRoutes
     from "./src/routes/analyticsRoutes.js";
 
+import marketRoutes
+    from "./src/routes/marketRoutes.js";
+
 
 dotenv.config();
 
@@ -41,6 +44,11 @@ app.use(
 app.use(
     "/api",
     analyticsRoutes
+);
+
+app.use(
+    "/api/market",
+    marketRoutes
 );
 
 
