@@ -66,11 +66,15 @@ router.post("/login", async (req, res) => {
             return res.status(401).json({ success: false, error: "Invalid email or password." });
         }
 
+        const token = createAuthToken(user);
+
         setAuthCookie(res, user);
 
-       
-
-        return res.json({ success: true, user: toPublicUser(user) });
+        return res.json({
+            success: true,
+            user: toPublicUser(user),
+            token
+        });
     } catch (error) {
         console.error("Login failed:", error?.message ?? error);
         return res.status(500).json({ success: false, error: "Login failed." });
@@ -88,9 +92,13 @@ router.post("/google", async (req, res) => {
         if (!user) {
             return res.status(401).json({ success: false, error: "This account is not active." });
         }
-
+        const token = createAuthToken(user);
         setAuthCookie(res, user);
-        return res.json({ success: true, user: toPublicUser(user) });
+        return res.json({
+            success: true,
+            user: toPublicUser(user),
+            token
+        });
     } catch (error) {
         const status = error?.code === "GOOGLE_TOKEN_INVALID" ? 401 : 500;
         console.error("Google login failed:", error?.message ?? error);
