@@ -16,7 +16,19 @@ import { requireAuth } from "../middleware/authMiddleware.js";
 const router = express.Router();
 
 function setAuthCookie(res, user) {
-    res.cookie(AUTH_COOKIE_NAME, createAuthToken(user), getAuthCookieOptions());
+    const token = createAuthToken(user);
+    const options = getAuthCookieOptions();
+
+    console.log("[COOKIE DEBUG] creating auth cookie", {
+        cookieName: AUTH_COOKIE_NAME,
+        options
+    });
+
+    res.cookie(
+        AUTH_COOKIE_NAME,
+        token,
+        options
+    );
 }
 
 router.post("/register", async (req, res) => {
@@ -55,6 +67,9 @@ router.post("/login", async (req, res) => {
         }
 
         setAuthCookie(res, user);
+
+       
+
         return res.json({ success: true, user: toPublicUser(user) });
     } catch (error) {
         console.error("Login failed:", error?.message ?? error);
