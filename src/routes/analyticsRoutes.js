@@ -182,6 +182,7 @@ router.post(
 
                 analytics.keyMetrics = calculateKeyMetrics({
                     years: analytics.years,
+                    periods: analytics.periods,
                     metrics: {
                         ...(analytics.metrics ?? {}),
                         ...Object.fromEntries(relatedMetrics)

@@ -45,14 +45,21 @@ export const liabilitiesBreakdownConfig = {
             ]
         },
 
+        totalBorrowings: {
+            role: "aggregate",
+            aliases: [
+                "total borrowings",
+                "total debt",
+                "interest bearing debt",
+                "interest-bearing debt"
+            ]
+        },
+
         longTermBorrowings: {
             role: "detail",
             aliases: [
                 "long term borrowings",
-                "long-term borrowings",
-                "loans and borrowings",
-                "debt",
-                "total borrowings"
+                "long-term borrowings"
             ]
         },
 
@@ -60,10 +67,7 @@ export const liabilitiesBreakdownConfig = {
             role: "detail",
             aliases: [
                 "short term borrowings",
-                "short-term borrowings",
-                "loans and borrowings",
-                "debt",
-                "total borrowings"
+                "short-term borrowings"
             ]
         }
     }

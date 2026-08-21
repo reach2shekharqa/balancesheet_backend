@@ -219,6 +219,14 @@ function extractYear(value) {
     const text =
         String(value ?? "");
 
+    if (/\bcurrent\s+year\b/i.test(text)) {
+        return "Current Year";
+    }
+
+    if (/\bprevious\s+year\b|\bprior\s+year\b/i.test(text)) {
+        return "Previous Year";
+    }
+
     const fiscalMatch = text.match(
         /\b(20\d{2})\s*[-/]\s*((?:20)?\d{2})\b/
     );
@@ -630,6 +638,20 @@ export async function extractFinancialAnalytics({
             selectedTable
         );
 
+    const detectedPeriods = years
+        .filter(Boolean)
+        .map(String)
+        .sort((first, second) => {
+            const firstStart = Number(first.match(/20\d{2}/)?.[0] ?? 0);
+            const secondStart = Number(second.match(/20\d{2}/)?.[0] ?? 0);
+            return secondStart - firstStart;
+        });
+
+    const periods = {
+        currentPeriod: detectedPeriods[0] ?? null,
+        previousPeriod: detectedPeriods[1] ?? null
+    };
+
 
     debugAnalyticsLog(
         "years detected:",
@@ -727,6 +749,7 @@ export async function extractFinancialAnalytics({
         },
 
         years,
+        periods,
 
         sections: discoveredSections,
 
@@ -1047,7 +1070,7 @@ export async function extractFinancialAnalytics({
     );
 
     const keyMetrics = analyticsType === "profitLoss"
-        ? calculateKeyMetrics({ years, metrics })
+        ? calculateKeyMetrics({ years, periods, metrics })
         : null;
 
 
@@ -1078,6 +1101,8 @@ export async function extractFinancialAnalytics({
         },
 
         years,
+
+        periods,
 
         metrics,
 
