@@ -61,6 +61,139 @@ const keyMetricDependencies = {
     roa: ["profitAfterTax", "totalAssets"]
 };
 
+const keyMetricCalculationDefinitions = {
+    revenueGrowth: {
+        formula: "(Current revenue - Previous revenue) / Previous revenue x 100",
+        calculationType: "revenueGrowth",
+        inputs: [{ key: "revenueFromOperations", label: "Revenue from operations" }]
+    },
+    netProfitMargin: {
+        formula: "Profit after tax / Revenue from operations x 100",
+        calculationType: "netProfitMargin",
+        inputs: [
+            { key: "profitAfterTax", label: "Profit after tax" },
+            { key: "revenueFromOperations", label: "Revenue from operations" }
+        ]
+    },
+    ebitdaMargin: {
+        formula: "(PBT + Finance costs + Depreciation and amortisation) / Revenue from operations x 100",
+        calculationType: "ebitdaMargin",
+        inputs: [
+            { key: "profitBeforeTax", label: "Profit before tax" },
+            { key: "financeCosts", label: "Finance costs" },
+            { key: "depreciationAndAmortisation", label: "Depreciation and amortisation" },
+            { key: "revenueFromOperations", label: "Revenue from operations" }
+        ]
+    },
+    currentRatio: {
+        formula: "Total current assets / Total current liabilities",
+        calculationType: "currentRatio",
+        inputs: [
+            { key: "totalCurrentAssets", label: "Total current assets" },
+            { key: "totalCurrentLiabilities", label: "Total current liabilities" }
+        ]
+    },
+    debtToEquity: {
+        formula: "Borrowings / Total equity",
+        calculationType: "debtToEquity",
+        inputs: [
+            { key: "totalBorrowings", label: "Total borrowings" },
+            { key: "longTermBorrowings", label: "Long-term borrowings" },
+            { key: "shortTermBorrowings", label: "Short-term borrowings" },
+            { key: "totalEquity", label: "Total equity" }
+        ]
+    },
+    roe: {
+        formula: "Profit after tax / Average total equity x 100",
+        calculationType: "roe",
+        inputs: [
+            { key: "profitAfterTax", label: "Profit after tax" },
+            { key: "totalEquity", label: "Total equity" }
+        ]
+    },
+    roa: {
+        formula: "Profit after tax / Average total assets x 100",
+        calculationType: "roa",
+        inputs: [
+            { key: "profitAfterTax", label: "Profit after tax" },
+            { key: "totalAssets", label: "Total assets" }
+        ]
+    }
+};
+
+function addCalculationDetails(keyMetrics, years, periods, metrics) {
+    const { currentPeriod, previousPeriod } = getPeriods(years, periods);
+
+    return Object.fromEntries(Object.entries(keyMetrics).map(([metricName, metric]) => {
+        const definition = keyMetricCalculationDefinitions[metricName];
+        if (!definition) return [metricName, metric];
+
+        const inputs = definition.inputs.map(input => {
+            const values = getMetricValues(metrics, input.key);
+            return {
+                key: input.key,
+                label: input.label,
+                currentValue: getNumericValue(values, currentPeriod),
+                previousValue: getNumericValue(values, previousPeriod)
+            };
+        });
+        const inputValue = (key, period) => {
+            const input = inputs.find(candidate => candidate.key === key);
+            return input?.[period === currentPeriod ? "currentValue" : "previousValue"] ?? null;
+        };
+        const derivedValues = {};
+
+        if (definition.calculationType === "ebitdaMargin") {
+            for (const [period, suffix] of [[currentPeriod, "current"], [previousPeriod, "previous"]]) {
+                const pbt = inputValue("profitBeforeTax", period);
+                const financeCosts = inputValue("financeCosts", period);
+                const depreciation = inputValue("depreciationAndAmortisation", period);
+                derivedValues[`${suffix}Ebitda`] = [pbt, financeCosts, depreciation].every(value => value !== null)
+                    ? pbt + financeCosts + depreciation
+                    : null;
+            }
+        }
+
+        if (definition.calculationType === "debtToEquity") {
+            for (const [period, suffix] of [[currentPeriod, "current"], [previousPeriod, "previous"]]) {
+                const totalBorrowings = inputValue("totalBorrowings", period);
+                const longTerm = inputValue("longTermBorrowings", period);
+                const shortTerm = inputValue("shortTermBorrowings", period);
+                derivedValues[`${suffix}Borrowings`] = totalBorrowings ?? (
+                    longTerm !== null || shortTerm !== null
+                        ? (longTerm ?? 0) + (shortTerm ?? 0)
+                        : null
+                );
+            }
+        }
+
+        if (definition.calculationType === "roe" || definition.calculationType === "roa") {
+            const denominatorKey = definition.calculationType === "roe" ? "totalEquity" : "totalAssets";
+            const currentDenominator = inputValue(denominatorKey, currentPeriod);
+            const previousDenominator = inputValue(denominatorKey, previousPeriod);
+            derivedValues.averageDenominator = currentDenominator !== null && previousDenominator !== null
+                ? (currentDenominator + previousDenominator) / 2
+                : null;
+        }
+
+        return [metricName, {
+            ...metric,
+            calculation: {
+                formula: definition.formula,
+                type: definition.calculationType,
+                currentPeriod,
+                previousPeriod,
+                results: {
+                    currentValue: metric.currentValue ?? null,
+                    previousValue: metric.previousValue ?? null
+                },
+                inputs,
+                derivedValues
+            }
+        }];
+    }));
+}
+
 function auditKeyMetricDependencies(metrics) {
     for (const [metric, dependencies] of Object.entries(keyMetricDependencies)) {
         for (const dependency of dependencies) {
@@ -445,7 +578,7 @@ export function calculateKeyMetrics(financialAnalytics) {
 
     auditKeyMetricDependencies(metrics);
 
-    return {
+    const keyMetrics = {
         revenueGrowth: calculateRevenueGrowth({ years, periods, metrics }),
         netProfitMargin: calculateNetProfitMargin({ years, periods, metrics }),
         ebitdaMargin: calculateEbitdaMargin({ years, periods, metrics }),
@@ -454,4 +587,6 @@ export function calculateKeyMetrics(financialAnalytics) {
         roe: calculateRoe({ years, periods, metrics }),
         roa: calculateRoa({ years, periods, metrics })
     };
+
+    return addCalculationDetails(keyMetrics, years, periods, metrics);
 }
