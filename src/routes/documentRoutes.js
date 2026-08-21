@@ -103,17 +103,42 @@ router.get(
     "/",
     requireAuth,
     async (req, res) => {
+
+        const startedAt = Date.now();
+
+        console.log("[DOCUMENTS DEBUG] GET /api/documents handler entered");
+
         try {
+
+            console.log("[DOCUMENTS DEBUG] authenticated user", {
+                userId: req.user?.userId
+            });
+
+            console.log("[DOCUMENTS DEBUG] calling getUserDocuments");
+
             const documents = await getUserDocuments({
                 userId: req.user.userId
             });
+
+            console.log("[DOCUMENTS DEBUG] getUserDocuments completed", {
+                count: documents.length,
+                elapsedMs: Date.now() - startedAt
+            });
+
+            console.log("[DOCUMENTS DEBUG] sending response");
 
             return res.json({
                 success: true,
                 documents
             });
+
         } catch (error) {
-            console.error("Document list failed:", error);
+
+            console.error("[DOCUMENTS DEBUG] Document list failed", {
+                message: error?.message,
+                stack: error?.stack,
+                elapsedMs: Date.now() - startedAt
+            });
 
             return res.status(500).json({
                 success: false,

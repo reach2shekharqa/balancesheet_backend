@@ -77,23 +77,48 @@ export async function linkDocumentToUser({
 }
 
 export async function getUserDocuments({ userId }) {
-    const result = await pool.query(
-        `
-        SELECT
-            d.id,
-            d.original_filename,
-            d.file_size_mb,
-            d.extraction_status,
-            d.uploaded_at,
-            ud.created_at AS linked_at
-        FROM user_documents ud
-        INNER JOIN documents d
-            ON d.id = ud.document_id
-        WHERE ud.user_id = $1
-        ORDER BY ud.created_at DESC, d.id DESC
-        `,
-        [userId]
-    );
 
-    return result.rows;
+    const startedAt = Date.now();
+
+    console.log("[USER DOCS DEBUG] query starting", {
+        userId
+    });
+
+    try {
+
+        const result = await pool.query(
+            `
+            SELECT
+                d.id,
+                d.original_filename,
+                d.file_size_mb,
+                d.extraction_status,
+                d.uploaded_at,
+                ud.created_at AS linked_at
+            FROM user_documents ud
+            INNER JOIN documents d
+                ON d.id = ud.document_id
+            WHERE ud.user_id = $1
+            ORDER BY ud.created_at DESC, d.id DESC
+            `,
+            [userId]
+        );
+
+        console.log("[USER DOCS DEBUG] query completed", {
+            rows: result.rows.length,
+            elapsedMs: Date.now() - startedAt
+        });
+
+        return result.rows;
+
+    } catch (error) {
+
+        console.error("[USER DOCS DEBUG] query failed", {
+            message: error?.message,
+            stack: error?.stack,
+            elapsedMs: Date.now() - startedAt
+        });
+
+        throw error;
+    }
 }
