@@ -943,6 +943,10 @@ function isStructuralSectionHeading(
         return false;
     }
 
+    if (hasNumericValue(row)) {
+        return false;
+    }
+
     const normalizedLabel =
         normalizeSectionLabel(label);
 
@@ -1037,6 +1041,31 @@ function isGenericSectionBoundary(
     }
 
     return true;
+}
+
+
+function isExplicitSectionTotal(
+    label,
+    sectionAliases
+) {
+    const normalizedLabel = canonicalizeMatchText(label);
+
+    if (!normalizedLabel || !Array.isArray(sectionAliases)) {
+        return false;
+    }
+
+    return sectionAliases.some(alias => {
+        const normalizedAlias = normalizeSectionLabel(alias);
+
+        if (!normalizedAlias) {
+            return false;
+        }
+
+        return normalizedLabel === `total ${normalizedAlias}` ||
+            normalizedLabel.startsWith(`total ${normalizedAlias} `) ||
+            normalizedLabel === `subtotal ${normalizedAlias}` ||
+            normalizedLabel.startsWith(`subtotal ${normalizedAlias} `);
+    });
 }
 
 
@@ -1145,6 +1174,19 @@ function findConfiguredSections(
             rowIndex++
         ) {
             const row = table.rows[rowIndex];
+
+            if (
+                isExplicitSectionTotal(
+                    getRowLabel(row),
+                    current.aliases
+                ) &&
+                hasNumericValue(row)
+            ) {
+                // Keep the source total in the section, but never scan past it.
+                endIndex = rowIndex + 1;
+                break;
+            }
+
             const rowIsConfiguredMetric = Object.values(
                 analyticsConfig?.metrics ?? {}
             ).some(metricConfig =>
@@ -1160,6 +1202,7 @@ function findConfiguredSections(
         }
 
         sections.push({
+            sectionId: `section-${current.startIndex}`,
             groupIndex:
                 current.groupIndex,
 
@@ -1207,7 +1250,8 @@ function getRowSection(
 function findMetricCandidateRows(
     table,
     aliases,
-    analyticsConfig
+    analyticsConfig,
+    searchWholeTable = false
 ) {
     const sections =
         findConfiguredSections(
@@ -1221,7 +1265,11 @@ function findMetricCandidateRows(
      * No section configuration:
      * search entire table.
      */
-    if (sections.length === 0) {
+    if (sections.length === 0 || searchWholeTable) {
+        if (!searchWholeTable && getRequiredSectionSignals(analyticsConfig).length > 0) {
+            return [];
+        }
+
         for (
             let index = 0;
             index < table.rows.length;
@@ -1388,12 +1436,13 @@ function getAllSectionAliases(
 function findExplicitAggregateRow(
     table,
     aliases,
-    role = "detail"
+    role = "detail",
+    startIndex = 0
 ) {
     let bestMatch = null;
 
     for (
-        let index = 0;
+        let index = startIndex;
         index < table.rows.length;
         index++
     ) {
@@ -2563,18 +2612,35 @@ function findAggregateMetricRow(
     const role =
         getMetricRole(config);
 
+    const semanticSections = findConfiguredSections(
+        table,
+        analyticsConfig
+    );
+
+    if (role === "statementtotal") {
+        const explicitStatementTotal = findExplicitAggregateRow(
+            table,
+            aliases.filter(alias => canonicalizeMatchText(alias) !== "total"),
+            role
+        );
+
+        if (explicitStatementTotal) {
+            explicitStatementTotal.row.__analyticsResolution =
+                explicitStatementTotal.resolution;
+            return explicitStatementTotal.row;
+        }
+    }
+
     /*
      * Section totals must be resolved inside their section.
      * A global alias match could otherwise select a similarly
      * named total from another section.
      */
-    if (role !== "sectiontotal") {
-        const semanticSections =
-            findConfiguredSections(
-                table,
-                analyticsConfig
-            );
-
+    if (
+        role !== "sectiontotal" &&
+        semanticSections.length === 0 &&
+        getRequiredSectionSignals(analyticsConfig).length === 0
+    ) {
         const explicitAliases =
             role === "statementtotal" &&
             semanticSections.length > 0
@@ -3208,8 +3274,15 @@ function findMetricRows(
                 findMetricCandidateRows(
                     table,
                     aliases,
-                    null
+                    analyticsConfig
                 );
+        }
+
+        if (config?.searchOutsideSections) {
+            candidates = [
+                ...findMetricCandidateRows(table, aliases, analyticsConfig, true),
+                ...candidates
+            ];
         }
 
         let numericMatch = null;

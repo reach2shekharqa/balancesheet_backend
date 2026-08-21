@@ -6,9 +6,6 @@ import { selectTables } from "../analytics/core/tableSelector.js";
 import {
     findConfiguredSections
 } from "../analytics/core/metricRowMatcher.js";
-import {
-    calculateKeyMetrics
-} from "../analytics/services/keyMetricsService.js";
 
 const DEBUG_ANALYTICS_LOGGING =
     process.env.DEBUG_ANALYTICS !== "0";
@@ -674,6 +671,22 @@ export async function extractFinancialAnalytics({
         )
     );
 
+    for (const section of discoveredSections) {
+        debugAnalyticsLog(
+            "[SECTION BOUNDARY]",
+            JSON.stringify({
+                analyticsType,
+                tableIndex: selectedTable.tableIndex,
+                sectionId: section.sectionId,
+                section: section.section,
+                startIndex: section.startIndex,
+                endIndex: section.endIndex,
+                explicitTotal: section.sourceTotal?.label ?? null,
+                totalValues: section.sourceTotal?.values ?? null
+            })
+        );
+    }
+
 
     /* =========================================================
        DEBUG SELECTED TABLE ROWS
@@ -827,29 +840,25 @@ export async function extractFinancialAnalytics({
 
 
     for (
-        const [
-            metricName,
-            match
-        ] of Object.entries(
-            metricMatches
-        )
+        const metricName of Object.keys(config.metrics)
     ) {
+        const match = metricMatches[metricName];
 
         const rowIndex =
             selectedTable.rows.findIndex(
                 row =>
-                    row === match.row
+                    row === match?.row
             );
 
 
         const rowLabel =
             String(
-                match.row?.[0]?.text ?? ""
+                match?.row?.[0]?.text ?? ""
             ).trim();
 
 
         const values =
-            Array.isArray(match.row)
+            Array.isArray(match?.row)
                 ? match.row.map(
                     cell =>
                         String(
@@ -876,13 +885,9 @@ export async function extractFinancialAnalytics({
 
 
     for (
-        const [
-            metricName,
-            match
-        ] of Object.entries(
-            metricMatches
-        )
+        const metricName of Object.keys(config.metrics)
     ) {
+        const match = metricMatches[metricName];
 
         const values =
             extractMetricValues(
@@ -930,6 +935,25 @@ export async function extractFinancialAnalytics({
                 section:
                     section?.section ?? null,
 
+                sourceSectionId:
+                    section?.sectionId ?? null,
+
+                sourceSection:
+                    section?.section ?? null,
+
+                sourceRowIndex: rowIndex,
+
+                sourceRowLabel: String(
+                    match.row?.[0]?.text ?? ""
+                ).trim(),
+
+                sourceTotal:
+                    section?.sourceTotal ?? null,
+
+                inclusionReason: section
+                    ? "matched alias within validated source section"
+                    : "unresolved source section",
+
                 role:
                     config.metrics[metricName]?.role ??
                     "detail",
@@ -938,6 +962,8 @@ export async function extractFinancialAnalytics({
                     rowIndex,
                     label: String(match.row?.[0]?.text ?? "").trim(),
                     section: section?.section ?? null,
+                    sectionId: section?.sectionId ?? null,
+                    sourceTotal: section?.sourceTotal ?? null,
                     years: Object.keys(values),
                     values: sourceValues,
                     role: config.metrics[metricName]?.role ?? "detail",
@@ -1004,6 +1030,12 @@ export async function extractFinancialAnalytics({
                 values: {},
                 rowIndex: null,
                 section: null,
+                sourceSectionId: null,
+                sourceSection: null,
+                sourceRowIndex: null,
+                sourceRowLabel: null,
+                sourceTotal: null,
+                inclusionReason: "source section could not be established",
                 role: config.metrics[metricName]?.role ?? "detail",
                 resolution: {
                     status: "unresolved",
@@ -1069,11 +1101,6 @@ export async function extractFinancialAnalytics({
         JSON.stringify(dataset, null, 2)
     );
 
-    const keyMetrics = analyticsType === "profitLoss"
-        ? calculateKeyMetrics({ years, periods, metrics })
-        : null;
-
-
     /* =========================================================
        FINAL RESULT
        ========================================================= */
@@ -1105,8 +1132,6 @@ export async function extractFinancialAnalytics({
         periods,
 
         metrics,
-
-        ...(keyMetrics ? { keyMetrics } : {}),
 
         sections: discoveredSections,
 
@@ -1179,6 +1204,9 @@ function discoverSectionRows(table, analyticsConfig, years) {
         }
 
         discoveredSections.push({
+            sectionId:
+                section.sectionId ??
+                `section-${section.startIndex}`,
             section:
                 String(
                     table.rows[section.startIndex]?.[0]?.text ??
@@ -1187,8 +1215,22 @@ function discoverSectionRows(table, analyticsConfig, years) {
                 ).trim(),
             startIndex: section.startIndex,
             endIndex: section.endIndex,
+            sourceTotal: null,
             rows
         });
+
+        const discoveredSection = discoveredSections.at(-1);
+        const totalRow = rows.find(row =>
+            /^(?:total|subtotal)\b/i.test(row.label)
+        );
+
+        if (totalRow) {
+            discoveredSection.sourceTotal = {
+                rowIndex: totalRow.rowIndex,
+                label: totalRow.label,
+                values: totalRow.values
+            };
+        }
     }
 
     return discoveredSections;
@@ -1230,11 +1272,34 @@ function buildAnalyticsDataset(
             const metric =
                 metricsByRowIndex.get(row.rowIndex);
 
+            const percentages = section.sourceTotal
+                ? Object.fromEntries(
+                    Object.entries(row.values).flatMap(([year, value]) => {
+                        const total = section.sourceTotal.values?.[year];
+
+                        return Number.isFinite(value) &&
+                            Number.isFinite(total) &&
+                            total !== 0
+                            ? [[year, (value / total) * 100]]
+                            : [];
+                    })
+                )
+                : {};
+
             return {
+                sourceSectionId: section.sectionId ?? null,
                 section: section.section,
+                sourceSection: section.section,
                 rowIndex: row.rowIndex,
+                sourceRowIndex: row.rowIndex,
                 label: row.label,
+                sourceRowLabel: row.label,
                 values: row.values,
+                sourceTotal: section.sourceTotal ?? null,
+                percentages,
+                inclusionReason: metric
+                    ? "matched configured metric within validated source section"
+                    : "source row within validated section",
                 role: metric?.role ?? "detail",
                 metricNames: metric?.metricNames ?? []
             };

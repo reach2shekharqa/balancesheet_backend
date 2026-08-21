@@ -20,6 +20,7 @@ export const profitLossConfig = {
     metrics: {
         revenueFromOperations: {
             role: "income",
+            searchOutsideSections: true,
             aliases: [
                 "revenue from operations",
                 "revenue from operation",
@@ -127,11 +128,14 @@ export const profitLossConfig = {
 
         profitBeforeTax: {
             role: "profit",
+            searchOutsideSections: true,
             aliases: [
                 "profit before tax",
                 "profit before tax (pbt)",
                 "profit/(loss) before tax",
                 "profit / (loss) before tax",
+                "profit/(loss) beforetax",
+                "profit beforetax (pbt)",
                 "profit loss before tax",
                 "profit loss beforetax",
                 "profit beforetax"
@@ -159,11 +163,14 @@ export const profitLossConfig = {
 
         profitAfterTax: {
             role: "profit",
+            searchOutsideSections: true,
             aliases: [
                 "profit after tax",
                 "profit after tax (pat)",
                 "profit/(loss) after tax",
                 "profit / (loss) after tax",
+                "profit / loss after tax",
+                "profit after tax (pat)",
                 "profit for the year",
                 "profit for year",
                 "net income",

@@ -176,16 +176,28 @@ router.post(
                     extractFinancialAnalytics({ markdown, analyticsType: "assetsBreakdown", documentId }),
                     extractFinancialAnalytics({ markdown, analyticsType: "liabilitiesBreakdown", documentId })
                 ]);
-                const relatedMetrics = relatedResults
-                    .filter(result => result.status === "fulfilled")
-                    .flatMap(result => Object.entries(result.value.metrics ?? {}));
+                const assets = relatedResults[0].status === "fulfilled"
+                    ? relatedResults[0].value
+                    : null;
+                const liabilities = relatedResults[1].status === "fulfilled"
+                    ? relatedResults[1].value
+                    : null;
 
                 analytics.keyMetrics = calculateKeyMetrics({
-                    years: analytics.years,
-                    periods: analytics.periods,
+                    profitLoss: analytics,
                     metrics: {
                         ...(analytics.metrics ?? {}),
-                        ...Object.fromEntries(relatedMetrics)
+                        ...(assets?.metrics ?? {}),
+                        ...(liabilities?.metrics ?? {})
+                    },
+                    balanceSheet: {
+                        analyticsType: "balanceSheet",
+                        years: assets?.years ?? liabilities?.years ?? [],
+                        periods: assets?.periods ?? liabilities?.periods ?? analytics.periods,
+                        metrics: {
+                            ...(assets?.metrics ?? {}),
+                            ...(liabilities?.metrics ?? {})
+                        }
                     }
                 });
             }

@@ -41,6 +41,59 @@ function getPeriods(years, periods) {
     };
 }
 
+const canonicalSources = {
+    profitLoss: [
+        "revenueFromOperations",
+        "profitAfterTax",
+        "profitBeforeTax",
+        "financeCosts",
+        "depreciationAndAmortisation"
+    ],
+    balanceSheet: [
+        "totalCurrentAssets",
+        "totalCurrentLiabilities",
+        "totalAssets",
+        "totalEquity",
+        "totalBorrowings"
+    ]
+};
+
+function createCanonicalFinancialSnapshot(financialAnalytics = {}) {
+    const profitLoss = financialAnalytics.profitLoss ?? financialAnalytics;
+    const balanceSheet = financialAnalytics.balanceSheet ?? financialAnalytics;
+    const unifiedMetrics = financialAnalytics.metrics ?? null;
+    const legacyMetrics = !financialAnalytics.profitLoss && !financialAnalytics.balanceSheet
+        ? unifiedMetrics ?? {}
+        : null;
+    const periods = profitLoss.periods ?? balanceSheet.periods ?? {};
+    const years = profitLoss.years ?? balanceSheet.years ?? [];
+    const sourceValues = (statement, key) =>
+        unifiedMetrics?.[key]?.values ??
+        statement?.metrics?.[key]?.values ??
+        {};
+    const legacyValues = key => legacyMetrics?.[key]?.values ?? {};
+
+    return {
+        years,
+        periods,
+        profitLoss: Object.fromEntries(canonicalSources.profitLoss.map(key => [
+            key,
+            legacyMetrics ? legacyValues(key) : sourceValues(profitLoss, key)
+        ])),
+        balanceSheet: Object.fromEntries([
+            ...canonicalSources.balanceSheet,
+            ...(legacyMetrics ? ["longTermBorrowings", "shortTermBorrowings"] : [])
+        ].map(key => [key, legacyMetrics ? legacyValues(key) : sourceValues(balanceSheet, key)]))
+    };
+}
+
+function snapshotMetrics(snapshot) {
+    return Object.fromEntries([
+        ...Object.entries(snapshot.profitLoss),
+        ...Object.entries(snapshot.balanceSheet)
+    ].map(([key, values]) => [key, { values }]));
+}
+
 const keyMetricDependencies = {
     revenueGrowth: ["revenueFromOperations"],
     netProfitMargin: ["profitAfterTax", "revenueFromOperations"],
@@ -53,8 +106,6 @@ const keyMetricDependencies = {
     currentRatio: ["totalCurrentAssets", "totalCurrentLiabilities"],
     debtToEquity: [
         "totalBorrowings",
-        "longTermBorrowings",
-        "shortTermBorrowings",
         "totalEquity"
     ],
     roe: ["profitAfterTax", "totalEquity"],
@@ -98,8 +149,6 @@ const keyMetricCalculationDefinitions = {
         calculationType: "debtToEquity",
         inputs: [
             { key: "totalBorrowings", label: "Total borrowings" },
-            { key: "longTermBorrowings", label: "Long-term borrowings" },
-            { key: "shortTermBorrowings", label: "Short-term borrowings" },
             { key: "totalEquity", label: "Total equity" }
         ]
     },
@@ -157,8 +206,8 @@ function addCalculationDetails(keyMetrics, years, periods, metrics) {
         if (definition.calculationType === "debtToEquity") {
             for (const [period, suffix] of [[currentPeriod, "current"], [previousPeriod, "previous"]]) {
                 const totalBorrowings = inputValue("totalBorrowings", period);
-                const longTerm = inputValue("longTermBorrowings", period);
-                const shortTerm = inputValue("shortTermBorrowings", period);
+                const longTerm = getNumericValue(getMetricValues(metrics, "longTermBorrowings"), period);
+                const shortTerm = getNumericValue(getMetricValues(metrics, "shortTermBorrowings"), period);
                 derivedValues[`${suffix}Borrowings`] = totalBorrowings ?? (
                     longTerm !== null || shortTerm !== null
                         ? (longTerm ?? 0) + (shortTerm ?? 0)
@@ -176,8 +225,19 @@ function addCalculationDetails(keyMetrics, years, periods, metrics) {
                 : null;
         }
 
+        const statement = ["roa", "roe"].includes(metricName)
+            ? "profitLoss+balanceSheet"
+            : ["currentRatio", "debtToEquity"].includes(metricName)
+                ? "balanceSheet"
+                : "profitLoss";
+
         return [metricName, {
             ...metric,
+            source: {
+                statement,
+                current: Object.fromEntries(inputs.map(input => [input.key, input.currentValue])),
+                previous: Object.fromEntries(inputs.map(input => [input.key, input.previousValue]))
+            },
             calculation: {
                 formula: definition.formula,
                 type: definition.calculationType,
@@ -188,7 +248,12 @@ function addCalculationDetails(keyMetrics, years, periods, metrics) {
                     previousValue: metric.previousValue ?? null
                 },
                 inputs,
-                derivedValues
+                derivedValues,
+                source: {
+                    statement,
+                    current: Object.fromEntries(inputs.map(input => [input.key, input.currentValue])),
+                    previous: Object.fromEntries(inputs.map(input => [input.key, input.previousValue]))
+                }
             }
         }];
     }));
@@ -479,16 +544,20 @@ export function calculateDebtToEquity({ years, periods, metrics }) {
     const shortTermValues = getMetricValues(metrics, "shortTermBorrowings");
     const equityValues = getMetricValues(metrics, "totalEquity");
     const calculate = year => {
-        const totalBorrowings = getNumericValue(totalBorrowingValues, year);
+        const reportedDebt = getNumericValue(totalBorrowingValues, year);
         const longTerm = getNumericValue(longTermValues, year);
         const shortTerm = getNumericValue(shortTermValues, year);
         const equity = getNumericValue(equityValues, year);
+        const debt = reportedDebt ?? (
+            longTerm !== null || shortTerm !== null
+                ? (longTerm ?? 0) + (shortTerm ?? 0)
+                : null
+        );
 
-        if (equity === null || equity === 0 || (totalBorrowings === null && longTerm === null && shortTerm === null)) {
+        if (equity === null || equity === 0 || debt === null) {
             return null;
         }
 
-        const debt = totalBorrowings ?? (longTerm ?? 0) + (shortTerm ?? 0);
         const result = debt / equity;
         return Number.isFinite(result) ? Number(result.toFixed(2)) : null;
     };
@@ -502,7 +571,7 @@ export function calculateDebtToEquity({ years, periods, metrics }) {
             currentPeriod,
             previousPeriod,
             "Interest-bearing borrowings or equity is unavailable or zero",
-            { derivedFrom: ["totalBorrowings", "longTermBorrowings", "shortTermBorrowings", "totalEquity"] }
+            { derivedFrom: ["totalBorrowings", "totalEquity"] }
         );
     }
 
@@ -514,7 +583,7 @@ export function calculateDebtToEquity({ years, periods, metrics }) {
         currentValue,
         previousValue,
         unit: "x",
-        extra: { derivedFrom: ["totalBorrowings", "longTermBorrowings", "shortTermBorrowings", "totalEquity"] }
+        extra: { derivedFrom: ["totalBorrowings", "totalEquity"] }
     });
 }
 
@@ -574,7 +643,10 @@ export function calculateRoa({ years, periods, metrics }) {
 }
 
 export function calculateKeyMetrics(financialAnalytics) {
-    const { years, periods, metrics } = financialAnalytics ?? {};
+    const snapshot = createCanonicalFinancialSnapshot(financialAnalytics);
+    const { years, periods } = snapshot;
+    const resolvedPeriods = getPeriods(years, periods);
+    const metrics = snapshotMetrics(snapshot);
 
     auditKeyMetricDependencies(metrics);
 
@@ -588,5 +660,23 @@ export function calculateKeyMetrics(financialAnalytics) {
         roa: calculateRoa({ years, periods, metrics })
     };
 
-    return addCalculationDetails(keyMetrics, years, periods, metrics);
+    const result = addCalculationDetails(keyMetrics, years, periods, metrics);
+
+    console.log("KEY METRICS SOURCE VALIDATION", JSON.stringify({
+        periods: {
+            current: resolvedPeriods.currentPeriod,
+            previous: resolvedPeriods.previousPeriod
+        },
+        profitLoss: Object.fromEntries(canonicalSources.profitLoss.map(key => [
+            key,
+            [getNumericValue(snapshot.profitLoss[key], resolvedPeriods.currentPeriod), getNumericValue(snapshot.profitLoss[key], resolvedPeriods.previousPeriod)]
+        ])),
+        balanceSheet: Object.fromEntries(canonicalSources.balanceSheet.map(key => [
+            key,
+            [getNumericValue(snapshot.balanceSheet[key], resolvedPeriods.currentPeriod), getNumericValue(snapshot.balanceSheet[key], resolvedPeriods.previousPeriod)]
+        ])),
+        calculated: Object.fromEntries(Object.entries(result).map(([key, metric]) => [key, metric.status === "calculated" ? metric.value : metric.status]))
+    }));
+
+    return result;
 }
