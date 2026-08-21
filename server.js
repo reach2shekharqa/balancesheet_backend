@@ -1,23 +1,16 @@
 import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
-import authRoutes
-    from "./src/routes/authRoutes.js";
 
-import documentRoutes
-    from "./src/routes/documentRoutes.js";
-
-import analyticsRoutes
-    from "./src/routes/analyticsRoutes.js";
-
-import marketRoutes
-    from "./src/routes/marketRoutes.js";
-
+import authRoutes from "./src/routes/authRoutes.js";
+import documentRoutes from "./src/routes/documentRoutes.js";
+import analyticsRoutes from "./src/routes/analyticsRoutes.js";
+import marketRoutes from "./src/routes/marketRoutes.js";
 
 dotenv.config();
 
-
 const app = express();
+
 const allowedOrigins = [
     "http://localhost:5173",
     "https://balancesheet-frontend.onrender.com",
@@ -27,23 +20,66 @@ const allowedOrigins = [
         .filter(Boolean),
 ];
 
+/* =========================================================
+   REQUEST DEBUG LOGGER
+   ========================================================= */
+
 app.use((req, res, next) => {
-    console.log(
-        "REQUEST:",
-        req.method,
-        req.originalUrl
-    );
+    const startedAt = Date.now();
+
+    console.log("[REQUEST START]", {
+        method: req.method,
+        path: req.originalUrl,
+        origin: req.get("origin") || null,
+        hasCookie: !!req.get("cookie"),
+        hasAuthorization: !!req.get("authorization"),
+        userAgent: req.get("user-agent") || null,
+    });
+
+    res.on("finish", () => {
+        console.log("[REQUEST END]", {
+            method: req.method,
+            path: req.originalUrl,
+            status: res.statusCode,
+            elapsedMs: Date.now() - startedAt,
+        });
+    });
+
+    res.on("close", () => {
+        console.log("[REQUEST CLOSE]", {
+            method: req.method,
+            path: req.originalUrl,
+            status: res.statusCode,
+            elapsedMs: Date.now() - startedAt,
+        });
+    });
 
     next();
 });
+
+
+/* =========================================================
+   CORS
+   ========================================================= */
+
 app.use(
     cors({
         origin: allowedOrigins,
-        credentials: true
+        credentials: true,
     })
 );
 
+
+/* =========================================================
+   JSON BODY PARSER
+   ========================================================= */
+
 app.use(express.json());
+
+
+/* =========================================================
+   ROUTES
+   ========================================================= */
 
 app.use(
     "/api/auth",
@@ -60,38 +96,49 @@ app.use(
     marketRoutes
 );
 
-
-
 app.use(
     "/api/documents",
     documentRoutes
 );
 
 
+/* =========================================================
+   SERVER
+   ========================================================= */
+
 const PORT =
     process.env.PORT || 3000;
 
 
-app.get("/health", (req, res) => {
+/* =========================================================
+   STARTUP DEBUG
+   ========================================================= */
 
-    res.json({
-
-        success: true,
-
-        message:
-            "Backend is running"
-
-    });
-
+console.log("[SERVER] STARTING", {
+    port: PORT,
+    nodeEnv: process.env.NODE_ENV,
+    timestamp: new Date().toISOString(),
 });
 
 
-app.listen(PORT, () => {
+/* =========================================================
+   HEALTH CHECK
+   ========================================================= */
 
+app.get("/health", (req, res) => {
+    res.json({
+        success: true,
+        message: "Backend is running",
+    });
+});
+
+
+/* =========================================================
+   LISTEN
+   ========================================================= */
+
+app.listen(PORT, () => {
     console.log(
         `Backend running on port ${PORT}`
     );
-
 });
-
-
