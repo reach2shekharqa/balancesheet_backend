@@ -36,6 +36,35 @@ export const liabilitiesBreakdownConfig = {
             aliases: [
                 "total liabilities"
             ]
+        },
+
+        totalEquity: {
+            role: "statementTotal",
+            aliases: [
+                "total equity"
+            ]
+        },
+
+        longTermBorrowings: {
+            role: "detail",
+            aliases: [
+                "long term borrowings",
+                "long-term borrowings",
+                "loans and borrowings",
+                "debt",
+                "total borrowings"
+            ]
+        },
+
+        shortTermBorrowings: {
+            role: "detail",
+            aliases: [
+                "short term borrowings",
+                "short-term borrowings",
+                "loans and borrowings",
+                "debt",
+                "total borrowings"
+            ]
         }
     }
 };

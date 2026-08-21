@@ -6,6 +6,9 @@ import { selectTables } from "../analytics/core/tableSelector.js";
 import {
     findConfiguredSections
 } from "../analytics/core/metricRowMatcher.js";
+import {
+    calculateKeyMetrics
+} from "../analytics/services/keyMetricsService.js";
 
 const DEBUG_ANALYTICS_LOGGING =
     process.env.DEBUG_ANALYTICS !== "0";
@@ -160,6 +163,7 @@ function parseFinancialNumber(value) {
             .replace(/\*/g, "")
             .replace(/_/g, "")
             .replace(/[$€£¥₹]/g, "")
+            .replace(/^rs\.?\s*/i, "")
             .replace(/\s+/g, " ")
             .trim();
 
@@ -173,11 +177,15 @@ function parseFinancialNumber(value) {
         /^-\s*\d/.test(cleaned);
 
 
-    const normalized =
-        cleaned
-            .replace(/[()]/g, "")
-            .replace(/,/g, "")
-            .trim();
+    const unsigned = cleaned
+        .replace(/[()]/g, "")
+        .replace(/\s+/g, "")
+        .trim();
+    const lastComma = unsigned.lastIndexOf(",");
+    const lastDot = unsigned.lastIndexOf(".");
+    const normalized = lastComma > lastDot
+        ? unsigned.replace(/\./g, "").replace(",", ".")
+        : unsigned.replace(/,/g, "");
 
 
     if (
@@ -211,8 +219,15 @@ function extractYear(value) {
     const text =
         String(value ?? "");
 
-    const match =
-        text.match(/\b(20\d{2})\b/);
+    const fiscalMatch = text.match(
+        /\b(20\d{2})\s*[-/]\s*((?:20)?\d{2})\b/
+    );
+
+    if (fiscalMatch) {
+        return `${fiscalMatch[1]}-${fiscalMatch[2].slice(-2)}`;
+    }
+
+    const match = text.match(/\b(20\d{2})\b/);
 
     return match
         ? match[1]
@@ -1031,6 +1046,10 @@ export async function extractFinancialAnalytics({
         JSON.stringify(dataset, null, 2)
     );
 
+    const keyMetrics = analyticsType === "profitLoss"
+        ? calculateKeyMetrics({ years, metrics })
+        : null;
+
 
     /* =========================================================
        FINAL RESULT
@@ -1061,6 +1080,8 @@ export async function extractFinancialAnalytics({
         years,
 
         metrics,
+
+        ...(keyMetrics ? { keyMetrics } : {}),
 
         sections: discoveredSections,
 

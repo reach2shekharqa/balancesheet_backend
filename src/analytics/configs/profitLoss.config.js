@@ -22,7 +22,11 @@ export const profitLossConfig = {
             role: "income",
             aliases: [
                 "revenue from operations",
-                "revenue from operations"
+                "revenue from operation",
+                "revenue",
+                "net sales",
+                "sales",
+                "turnover"
             ]
         },
 
@@ -128,7 +132,9 @@ export const profitLossConfig = {
                 "profit before tax (pbt)",
                 "profit/(loss) before tax",
                 "profit / (loss) before tax",
-                "profit loss before tax"
+                "profit loss before tax",
+                "profit loss beforetax",
+                "profit beforetax"
             ]
         },
 
@@ -158,6 +164,9 @@ export const profitLossConfig = {
                 "profit after tax (pat)",
                 "profit/(loss) after tax",
                 "profit / (loss) after tax",
+                "profit for the year",
+                "profit for year",
+                "net income",
                 "net profit",
                 "net profit after tax"
             ]

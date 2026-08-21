@@ -5,6 +5,7 @@ import { pool } from "../db/db.js";
 import {
     extractFinancialAnalytics
 } from "../services/financialAnalyticsService.js";
+import { calculateKeyMetrics } from "../analytics/services/keyMetricsService.js";
 import { requireAuth } from "../middleware/authMiddleware.js";
 
 
@@ -169,6 +170,24 @@ router.post(
                     documentId
 
                 });
+
+            if (analyticsType === "profitLoss") {
+                const relatedResults = await Promise.allSettled([
+                    extractFinancialAnalytics({ markdown, analyticsType: "assetsBreakdown", documentId }),
+                    extractFinancialAnalytics({ markdown, analyticsType: "liabilitiesBreakdown", documentId })
+                ]);
+                const relatedMetrics = relatedResults
+                    .filter(result => result.status === "fulfilled")
+                    .flatMap(result => Object.entries(result.value.metrics ?? {}));
+
+                analytics.keyMetrics = calculateKeyMetrics({
+                    years: analytics.years,
+                    metrics: {
+                        ...(analytics.metrics ?? {}),
+                        ...Object.fromEntries(relatedMetrics)
+                    }
+                });
+            }
 
 
             return res.json({

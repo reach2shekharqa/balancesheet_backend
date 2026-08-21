@@ -42,6 +42,9 @@ function canonicalizeMatchText(value) {
         .map(token => token
             .replace(/equivaients/g, "equivalents")
             .replace(/equivallents/g, "equivalents")
+            .replace(/borrowimgs/g, "borrowings")
+            .replace(/deffered/g, "deferred")
+            .replace(/equivalant/g, "equivalent")
         )
         .map(singularizeWord)
         .join(" ");
@@ -565,15 +568,21 @@ function hasNumericValue(row) {
 
 
 function getNumericCellValue(cell) {
-    const value = String(cell?.text ?? "")
+    const rawValue = String(cell?.text ?? "")
         .trim()
         .replace(/\*\*/g, "")
         .replace(/__/g, "")
         .replace(/\*/g, "")
         .replace(/_/g, "")
         .replace(/[$€£¥₹]/g, "")
-        .replace(/\s+/g, "")
-        .replace(/,/g, "");
+        .replace(/^rs\.?\s*/i, "")
+        .replace(/\s+/g, "");
+
+    const lastComma = rawValue.lastIndexOf(",");
+    const lastDot = rawValue.lastIndexOf(".");
+    const value = lastComma > lastDot
+        ? rawValue.replace(/\./g, "").replace(",", ".")
+        : rawValue.replace(/,/g, "");
 
     if (!value || value === "-") {
         return null;
@@ -3139,6 +3148,20 @@ function findMetricRows(
                 const section of
                 configuredSections
             ) {
+                const sectionRow = table.rows[section.startIndex];
+
+                if (
+                    sectionRow &&
+                    matchesAnyAlias(getRowLabel(sectionRow), aliases) &&
+                    hasValidYearValues(table, sectionRow)
+                ) {
+                    candidates.push({
+                        row: sectionRow,
+                        rowIndex: section.startIndex,
+                        section
+                    });
+                }
+
                 for (
                     let index =
                         section.startIndex + 1;
@@ -3283,17 +3306,21 @@ function findMetricRows(
                 parentMatch.row;
         }
 
-        /*
-         * Preserve generic fallback.
-         */
-        if (!matchedRow) {
-            matchedRow =
-                findAggregateMetricRow(
-                    table,
-                    config,
-                    metricsConfig,
-                    analyticsConfig
-                );
+        const structural = getStructuralAliases(config);
+
+        if (
+            !matchedRow &&
+            (
+                structural.sectionAliases.length > 0 ||
+                structural.aggregateAliases.length > 0
+            )
+        ) {
+            matchedRow = findAggregateMetricRow(
+                table,
+                config,
+                metricsConfig,
+                analyticsConfig
+            );
         }
 
         if (matchedRow) {
