@@ -1144,12 +1144,16 @@ function findConfiguredSections(
             rowIndex < endIndex;
             rowIndex++
         ) {
-            if (
-                isGenericSectionBoundary(
-                    table,
-                    rowIndex
-                )
-            ) {
+            const row = table.rows[rowIndex];
+            const rowIsConfiguredMetric = Object.values(
+                analyticsConfig?.metrics ?? {}
+            ).some(metricConfig =>
+                getConfiguredAliases(metricConfig).some(alias =>
+                    matchesAnyAlias(getRowLabel(row), [alias])
+                ) && hasValidYearValues(table, row)
+            );
+
+            if (!rowIsConfiguredMetric && isGenericSectionBoundary(table, rowIndex)) {
                 endIndex = rowIndex;
                 break;
             }

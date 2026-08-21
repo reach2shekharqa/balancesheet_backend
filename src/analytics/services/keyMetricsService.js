@@ -26,6 +26,34 @@ function getMetricValues(metrics, metricName) {
     return metrics?.[metricName]?.values ?? {};
 }
 
+const keyMetricDependencies = {
+    revenueGrowth: ["revenueFromOperations"],
+    netProfitMargin: ["profitAfterTax", "revenueFromOperations"],
+    ebitdaMargin: [
+        "profitBeforeTax",
+        "financeCosts",
+        "depreciationAndAmortisation",
+        "revenueFromOperations"
+    ],
+    currentRatio: ["totalCurrentAssets", "totalCurrentLiabilities"],
+    debtToEquity: [
+        "longTermBorrowings",
+        "shortTermBorrowings",
+        "totalEquity"
+    ],
+    roe: ["profitAfterTax", "totalEquity"],
+    roa: ["profitAfterTax", "totalAssets"]
+};
+
+function auditKeyMetricDependencies(metrics) {
+    for (const [metric, dependencies] of Object.entries(keyMetricDependencies)) {
+        for (const dependency of dependencies) {
+            const available = Object.keys(getMetricValues(metrics, dependency)).length > 0;
+            console.log("[KEY METRICS DEPENDENCY]", metric, dependency, available ? "PRESENT" : "MISSING");
+        }
+    }
+}
+
 function getTrend(currentValue, previousValue) {
     if (currentValue === null || previousValue === null) {
         return undefined;
@@ -178,12 +206,8 @@ export function calculateRevenueGrowth({ years, metrics }) {
 
     console.log(
         "[KEY METRICS] revenueGrowth",
-        `currentYear=${currentYear}`,
-        `previousYear=${previousYear}`,
-        `currentRevenue=${currentValue}`,
-        `previousRevenue=${previousValue}`,
-        `growth=${roundedValue}`,
-        "status=calculated"
+        "revenueFromOperations",
+        "PRESENT"
     );
 
     return {
@@ -376,6 +400,8 @@ export function calculateRoa({ years, metrics }) {
 
 export function calculateKeyMetrics(financialAnalytics) {
     const { years, metrics } = financialAnalytics ?? {};
+
+    auditKeyMetricDependencies(metrics);
 
     return {
         revenueGrowth: calculateRevenueGrowth({ years, metrics }),
