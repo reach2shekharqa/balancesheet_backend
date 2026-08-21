@@ -6,7 +6,8 @@ dotenv.config();
 const { Pool } = pg;
 
 export const pool = new Pool({
-    connectionString: process.env.DATABASE_URL || process.env.DB_LOCAL
+    connectionString: process.env.DATABASE_URL || process.env.DB_LOCAL,
+    family:4
 });
 
 pool.on("error", (error) => {
