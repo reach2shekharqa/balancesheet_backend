@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: financial-backend
+    env: node
+    buildCommand: apt-get update && apt-get install -y --no-install-recommends tesseract-ocr poppler-utils && npm install
+    startCommand: npm start

@@ -8,6 +8,8 @@ import analyticsRoutes from "./src/routes/analyticsRoutes.js";
 import marketRoutes from "./src/routes/marketRoutes.js";
 import subscriptionRoutes from "./src/routes/subscriptionRoutes.js";
 import adminRoutes from "./src/routes/adminRoutes.js";
+import ocrPocRoutes from "./src/routes/ocrPocRoutes.js";
+import { verifyOcrDependencies } from "./src/services/ocrPocService.js";
 import { permanentlyDeleteExpiredUsers } from "./src/services/adminService.js";
 
 dotenv.config();
@@ -114,6 +116,11 @@ app.use(
     documentRoutes
 );
 
+app.use(
+    "/api/ocr-poc",
+    ocrPocRoutes
+);
+
 
 /* =========================================================
    SERVER
@@ -132,6 +139,10 @@ console.log("[SERVER] STARTING", {
     nodeEnv: process.env.NODE_ENV,
     timestamp: new Date().toISOString(),
 });
+
+verifyOcrDependencies()
+    .then(() => console.log("[OCR POC] Tesseract and pdftoppm are available"))
+    .catch(error => console.error("[OCR POC] dependency verification failed:", error.message));
 
 
 /* =========================================================
