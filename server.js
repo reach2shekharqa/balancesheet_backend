@@ -7,6 +7,8 @@ import documentRoutes from "./src/routes/documentRoutes.js";
 import analyticsRoutes from "./src/routes/analyticsRoutes.js";
 import marketRoutes from "./src/routes/marketRoutes.js";
 import subscriptionRoutes from "./src/routes/subscriptionRoutes.js";
+import adminRoutes from "./src/routes/adminRoutes.js";
+import { permanentlyDeleteExpiredUsers } from "./src/services/adminService.js";
 
 dotenv.config();
 
@@ -88,6 +90,11 @@ app.use(
 );
 
 app.use(
+    "/api/admin",
+    adminRoutes
+);
+
+app.use(
     "/api",
     analyticsRoutes
 );
@@ -148,3 +155,15 @@ app.listen(PORT, () => {
         `Backend running on port ${PORT}`
     );
 });
+
+const runRetentionCleanup = async () => {
+    try {
+        const deletedUsers = await permanentlyDeleteExpiredUsers();
+        if (deletedUsers > 0) console.log(`[RETENTION] Permanently deleted ${deletedUsers} expired user(s).`);
+    } catch (error) {
+        console.error("[RETENTION] Cleanup failed:", error?.message ?? error);
+    }
+};
+
+runRetentionCleanup();
+setInterval(runRetentionCleanup, 60 * 60 * 1000);
