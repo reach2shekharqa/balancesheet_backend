@@ -267,7 +267,8 @@ async function retryFailedDocument({
 
 async function processDocumentUploadPipeline({
     file,
-    userId
+    userId,
+    onQuotaReserved
 }) {
 
     console.log(
@@ -406,6 +407,9 @@ async function processDocumentUploadPipeline({
 
     if (cache.action === "RETRY") {
 
+        await reserveQuotaOrThrow(userId);
+        onQuotaReserved();
+
         return await retryFailedDocument({
             userId,
             fileInfo,
@@ -420,6 +424,9 @@ async function processDocumentUploadPipeline({
      * CACHE MISS
      * =====================================================
      */
+
+    await reserveQuotaOrThrow(userId);
+    onQuotaReserved();
 
     const created =
         await createPendingDocument({
@@ -597,26 +604,40 @@ return {
 
 }
 
-export async function processDocumentUpload({ file, userId }) {
+async function reserveQuotaOrThrow(userId) {
     const reservation = await reserveUploadQuota(userId);
 
-    if (!reservation) {
-        const quota = await getUserUploadQuota(userId);
-        const error = new Error("Your upload limit has been reached.");
-        error.code = "UPLOAD_QUOTA_EXCEEDED";
-        error.status = quota ? 403 : 401;
-        error.details = quota ?? { plan: "FREE", uploads_used: 0, upload_quota: 1 };
-        throw error;
+    if (reservation) {
+        return;
     }
 
+    const quota = await getUserUploadQuota(userId);
+    const error = new Error("Your upload limit has been reached.");
+    error.code = "UPLOAD_QUOTA_EXCEEDED";
+    error.status = quota ? 403 : 401;
+    error.details = quota ?? { plan: "FREE", uploads_used: 0, upload_quota: 1 };
+    throw error;
+}
+
+export async function processDocumentUpload({ file, userId }) {
+    let quotaReserved = false;
+
     try {
-        const result = await processDocumentUploadPipeline({ file, userId });
-        if (["FAILED", "REUSE", "WAIT"].includes(result?.action)) {
+        const result = await processDocumentUploadPipeline({
+            file,
+            userId,
+            onQuotaReserved: () => {
+                quotaReserved = true;
+            }
+        });
+        if (quotaReserved && ["FAILED", "REUSE", "WAIT"].includes(result?.action)) {
             await releaseUploadQuota(userId);
         }
         return result;
     } catch (error) {
-        await releaseUploadQuota(userId);
+        if (quotaReserved) {
+            await releaseUploadQuota(userId);
+        }
         throw error;
     }
 }

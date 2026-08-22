@@ -8,6 +8,7 @@ import { removeUploadedFile } from "../services/fileUploadService.js";
 import { getUserDocuments } from "../services/userDocumentService.js";
 import { requireAuth } from "../middleware/authMiddleware.js";
 import { getUserUploadQuota } from "../services/planService.js";
+import { extractIdentityFromDocument } from "../services/companyIdentityService.js";
 
 
 const router = express.Router();
@@ -170,6 +171,42 @@ router.get(
                 success: false,
                 error: error?.message ?? String(error)
             });
+        }
+    }
+);
+
+router.post(
+    "/identity",
+    requireAuth,
+    async (req, res) => {
+        const fileHashes = Array.isArray(req.body?.fileHashes) ? req.body.fileHashes : [];
+        if (fileHashes.length === 0 || fileHashes.some(hash => typeof hash !== "string" || !/^[a-f0-9]{64}$/i.test(hash))) {
+            return res.status(400).json({ success: false, error: "Valid file hashes are required." });
+        }
+
+        try {
+            const result = await pool.query(
+                `
+                SELECT d.id, d.file_hash, d.original_filename, d.extraction_status, d.extraction_payload
+                FROM documents d
+                INNER JOIN user_documents ud ON ud.document_id = d.id AND ud.user_id = $1
+                WHERE d.file_hash = ANY($2::text[])
+                  AND d.extraction_status = 'completed'
+                  AND d.extraction_payload IS NOT NULL
+                `,
+                [req.user.userId, fileHashes]
+            );
+            return res.json({
+                success: true,
+                documents: result.rows.map(document => ({
+                    fileHash: document.file_hash,
+                    filename: document.original_filename,
+                    identity: extractIdentityFromDocument(document)
+                }))
+            });
+        } catch (error) {
+            console.error("[IDENTITY] cache lookup failed", { message: error?.message, stack: error?.stack });
+            return res.status(500).json({ success: false, error: "We couldn't verify the company identity in these reports." });
         }
     }
 );
