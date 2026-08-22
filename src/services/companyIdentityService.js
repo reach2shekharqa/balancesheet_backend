@@ -14,10 +14,12 @@ function firstMatch(text, patterns) {
     return null;
 }
 
+const CIN_VALUE_PATTERN = "([A-Z][0-9]{5}[\\s-]*[A-Z]{2}[\\s-]*[0-9]{4}[\\s-]*[A-Z]{3}[\\s-]*[0-9]{6})";
+
 export function extractIdentityFromText(text) {
     const source = String(text ?? "");
     const cin = firstMatch(source, [
-        /\bCIN\s*(?:[:#-|])?\s*([A-Z][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6})\b/i,
+        new RegExp(`\\bCIN\\s*(?:[:#-|])?\\s*${CIN_VALUE_PATTERN}\\b`, "i"),
     ]);
     const pan = firstMatch(source, [
         /\bPAN\s*(?:[:#-|])?\s*([A-Z]{5}[0-9]{4}[A-Z])\b/i
