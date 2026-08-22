@@ -5,7 +5,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
-const MAX_PAGES = 3;
+const MAX_PAGES = 1;
 const IMAGE_DPI = 200;
 
 function normalizeText(value) {
@@ -148,7 +148,7 @@ export async function verifyOcrDependencies() {
 
 export async function runOcrPoc({ pdfPath, companyName, cin }) {
     const runs = [];
-    for (let runNumber = 1; runNumber <= 3; runNumber += 1) {
+    for (let runNumber = 1; runNumber <= 1; runNumber += 1) {
         runs.push(await processRun({ sourcePdfPath: pdfPath, companyName, cin, runNumber }));
     }
 
