@@ -6,7 +6,7 @@ import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
 const MAX_PAGES = 1;
-const IMAGE_DPI = 200;
+const IMAGE_DPI = 150;
 
 function normalizeText(value) {
     return String(value ?? "")
@@ -75,7 +75,7 @@ async function processRun({ sourcePdfPath, companyName, cin, runNumber }) {
         logStage("temp PDF created", { path: runPdfPath });
 
         const imageStartedAt = process.hrtime.bigint();
-        logStage("page conversion started");
+        logStage("page conversion started", { dpi: IMAGE_DPI });
         await runCommand("pdftoppm", [
             "-f", "1",
             "-l", String(MAX_PAGES),
