@@ -55,6 +55,13 @@ async function processRun({ sourcePdfPath, companyName, cin, runNumber }) {
     const runPdfPath = path.join(runDirectory, "input.pdf");
     const imagePrefix = path.join(runDirectory, "page");
     const startedAt = process.hrtime.bigint();
+    const logStage = (stage, details = {}) => {
+        console.log(`[OCR POC] ${stage}`, {
+            run: runNumber,
+            elapsedMs: Number(process.hrtime.bigint() - startedAt) / 1e6,
+            ...details
+        });
+    };
     let peakRss = process.memoryUsage().rss;
     let sampleTimer;
 
@@ -65,8 +72,10 @@ async function processRun({ sourcePdfPath, companyName, cin, runNumber }) {
     try {
         sampleTimer = setInterval(sampleMemory, 25);
         await fs.promises.copyFile(sourcePdfPath, runPdfPath);
+        logStage("temp PDF created", { path: runPdfPath });
 
         const imageStartedAt = process.hrtime.bigint();
+        logStage("page conversion started");
         await runCommand("pdftoppm", [
             "-f", "1",
             "-l", String(MAX_PAGES),
@@ -76,6 +85,7 @@ async function processRun({ sourcePdfPath, companyName, cin, runNumber }) {
             imagePrefix
         ]);
         const imageMilliseconds = Number(process.hrtime.bigint() - imageStartedAt) / 1e6;
+        logStage("page conversion finished", { stageElapsedMs: imageMilliseconds });
 
         const imageFiles = (await fs.promises.readdir(runDirectory))
             .filter(fileName => /^page-\d+\.png$/.test(fileName))
@@ -87,16 +97,24 @@ async function processRun({ sourcePdfPath, companyName, cin, runNumber }) {
 
         const ocrStartedAt = process.hrtime.bigint();
         const pageTexts = [];
-        for (const imageFile of imageFiles) {
+        for (const [pageIndex, imageFile] of imageFiles.entries()) {
+            const pageStartedAt = process.hrtime.bigint();
+            logStage("Tesseract page started", { page: pageIndex + 1, file: imageFile });
             const { stdout } = await runCommand("tesseract", [
                 path.join(runDirectory, imageFile),
                 "stdout",
                 "--psm", "6"
             ]);
             pageTexts.push(stdout);
+            logStage("Tesseract page finished", {
+                page: pageIndex + 1,
+                file: imageFile,
+                stageElapsedMs: Number(process.hrtime.bigint() - pageStartedAt) / 1e6
+            });
         }
         const ocrMilliseconds = Number(process.hrtime.bigint() - ocrStartedAt) / 1e6;
         const ocrText = pageTexts.join("\n");
+        logStage("OCR completed", { pages: imageFiles.length, characters: ocrText.length });
         const totalMilliseconds = Number(process.hrtime.bigint() - startedAt) / 1e6;
 
         sampleMemory();
@@ -118,6 +136,7 @@ async function processRun({ sourcePdfPath, companyName, cin, runNumber }) {
             clearInterval(sampleTimer);
         }
         await removeDirectory(runDirectory);
+        logStage("cleanup", { path: runDirectory });
     }
 }
 

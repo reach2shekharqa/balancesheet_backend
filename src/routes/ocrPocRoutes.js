@@ -14,12 +14,28 @@ const upload = multer({
     }
 });
 
-router.post("/", upload.single("file"), async (req, res) => {
+router.post("/", (req, res, next) => {
+    req.ocrPocStartedAt = process.hrtime.bigint();
+    console.log("[OCR POC] request received", { elapsedMs: 0 });
+    res.on("finish", () => {
+        console.log("[OCR POC] response sent", {
+            elapsedMs: Number(process.hrtime.bigint() - req.ocrPocStartedAt) / 1e6,
+            status: res.statusCode
+        });
+    });
+    next();
+}, upload.single("file"), async (req, res) => {
     const uploadedPath = req.file?.path;
     try {
         if (!req.file) {
             return res.status(400).json({ success: false, error: "PDF file is required." });
         }
+
+        console.log("[OCR POC] file received", {
+            elapsedMs: Number(process.hrtime.bigint() - req.ocrPocStartedAt) / 1e6,
+            path: req.file.path,
+            sizeBytes: req.file.size
+        });
 
         const result = await runOcrPoc({
             pdfPath: req.file.path,
@@ -36,6 +52,10 @@ router.post("/", upload.single("file"), async (req, res) => {
         if (uploadedPath) {
             await fs.promises.rm(uploadedPath, { force: true });
         }
+        console.log("[OCR POC] cleanup", {
+            elapsedMs: Number(process.hrtime.bigint() - req.ocrPocStartedAt) / 1e6,
+            path: uploadedPath || null
+        });
     }
 });
 
