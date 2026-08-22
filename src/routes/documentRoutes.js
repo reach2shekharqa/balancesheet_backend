@@ -6,6 +6,7 @@ import {
 } from "../services/documentUploadService.js";
 import { getUserDocuments } from "../services/userDocumentService.js";
 import { requireAuth } from "../middleware/authMiddleware.js";
+import { getUserUploadQuota } from "../services/planService.js";
 
 
 const router = express.Router();
@@ -98,6 +99,25 @@ const uploadWithDebug = (req, res, next) => {
 
     });
 };
+
+router.get(
+    "/quota",
+    requireAuth,
+    async (req, res) => {
+        const quota = await getUserUploadQuota(req.user.userId);
+        if (!quota) {
+            return res.status(401).json({ success: false, error: "Authentication required." });
+        }
+        return res.json({
+            success: true,
+            plan: quota.plan,
+            planName: quota.plan_name,
+            uploadsUsed: quota.uploads_used,
+            uploadQuota: quota.upload_quota,
+            upgradeRequired: quota.plan !== "PLAN_250"
+        });
+    }
+);
 
 router.get(
     "/",
@@ -193,6 +213,18 @@ router.post(
             });
 
         } catch (error) {
+
+            if (error?.code === "UPLOAD_QUOTA_EXCEEDED") {
+                return res.status(403).json({
+                    success: false,
+                    code: error.code,
+                    message: error.message,
+                    plan: error.details.plan,
+                    uploadsUsed: error.details.uploads_used,
+                    uploadQuota: error.details.upload_quota,
+                    upgradeRequired: error.details.plan !== "PLAN_250"
+                });
+            }
 
             console.error(
                 "[UPLOAD DEBUG] route error:",

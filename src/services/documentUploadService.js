@@ -18,6 +18,12 @@ import {
     processPendingDocument
 } from "./documentProcessingService.js";
 
+import {
+    getUserUploadQuota,
+    releaseUploadQuota,
+    reserveUploadQuota
+} from "./planService.js";
+
 
 
 
@@ -259,7 +265,7 @@ async function retryFailedDocument({
 }
 
 
-export async function processDocumentUpload({
+async function processDocumentUploadPipeline({
     file,
     userId
 }) {
@@ -582,5 +588,29 @@ return {
 };
 
 
+}
+
+export async function processDocumentUpload({ file, userId }) {
+    const reservation = await reserveUploadQuota(userId);
+
+    if (!reservation) {
+        const quota = await getUserUploadQuota(userId);
+        const error = new Error("Your upload limit has been reached.");
+        error.code = "UPLOAD_QUOTA_EXCEEDED";
+        error.status = quota ? 403 : 401;
+        error.details = quota ?? { plan: "FREE", uploads_used: 0, upload_quota: 1 };
+        throw error;
+    }
+
+    try {
+        const result = await processDocumentUploadPipeline({ file, userId });
+        if (result?.action === "FAILED") {
+            await releaseUploadQuota(userId);
+        }
+        return result;
+    } catch (error) {
+        await releaseUploadQuota(userId);
+        throw error;
+    }
 }
 

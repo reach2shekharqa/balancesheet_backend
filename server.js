@@ -6,6 +6,7 @@ import authRoutes from "./src/routes/authRoutes.js";
 import documentRoutes from "./src/routes/documentRoutes.js";
 import analyticsRoutes from "./src/routes/analyticsRoutes.js";
 import marketRoutes from "./src/routes/marketRoutes.js";
+import subscriptionRoutes from "./src/routes/subscriptionRoutes.js";
 
 dotenv.config();
 
@@ -94,6 +95,11 @@ app.use(
 app.use(
     "/api/market",
     marketRoutes
+);
+
+app.use(
+    "/api/subscriptions",
+    subscriptionRoutes
 );
 
 app.use(
