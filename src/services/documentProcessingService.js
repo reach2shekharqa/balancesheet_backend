@@ -70,6 +70,8 @@ export async function processPendingDocument({
          * =====================================================
          */
 
+        console.log("[LLAMAPARSE] extracting", { documentId });
+
         const parsed =
             await parsePdfWithLlamaParse(
                 filePath

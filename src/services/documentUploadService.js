@@ -309,6 +309,11 @@ async function processDocumentUploadPipeline({
             fileInfo.filePath
         );
 
+    console.log(cache.action === "REUSE" ? "[CACHE] hit" : `[CACHE] ${cache.action.toLowerCase()}`, {
+        filename: fileInfo.originalFilename,
+        fileHash: fileInfo.fileHash
+    });
+
     console.log(
         "[UPLOAD DEBUG] cache result",
         {
@@ -331,6 +336,7 @@ async function processDocumentUploadPipeline({
         console.log(
             "[UPLOAD DEBUG] CACHE REUSE"
         );
+        console.log("[LLAMAPARSE] skipped", { reason: "cache-hit", fileHash: cache.fileHash });
 
         removeUploadedFile(fileInfo.filePath);
 
@@ -363,6 +369,7 @@ async function processDocumentUploadPipeline({
 
     if (cache.action === "WAIT") {
 
+        console.log("[LLAMAPARSE] skipped", { reason: "already-processing", fileHash: cache.fileHash });
         removeUploadedFile(fileInfo.filePath);
 
         console.log(
@@ -604,7 +611,7 @@ export async function processDocumentUpload({ file, userId }) {
 
     try {
         const result = await processDocumentUploadPipeline({ file, userId });
-        if (result?.action === "FAILED") {
+        if (["FAILED", "REUSE", "WAIT"].includes(result?.action)) {
             await releaseUploadQuota(userId);
         }
         return result;

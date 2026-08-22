@@ -1,6 +1,181 @@
-# Financial Analytics Flow
+# Financial Analyzer Architecture and Analytics Flow
 
-This describes the current implementation in `backend`, from an uploaded PDF to financial analytics and key metrics.
+This describes the current implementation across `frontend` and `backend`, from an uploaded PDF to financial analytics and key metrics.
+
+## Architecture At A Glance
+
+```mermaid
+flowchart LR
+  User[User] --> Browser[React/Vite frontend\nfrontend/src/App.jsx]
+
+  Browser --> AuthAPI[Auth routes\n/api/auth]
+  Browser --> DocumentAPI[Document routes\n/api/documents]
+  Browser --> AnalyticsAPI[Analytics route\n/api/documents/:documentId/analytics]
+  Browser --> SubscriptionAPI[Subscription routes\n/api/subscriptions]
+  Browser --> AdminAPI[Admin routes\n/api/admin]
+
+  AuthAPI --> AuthService[authService.js]
+  DocumentAPI --> UploadService[documentUploadService.js]
+  SubscriptionAPI --> PlanService[planService.js]
+  AdminAPI --> AdminService[adminService.js]
+
+  UploadService --> Cache[Document cache\nfile hash + status]
+  UploadService --> Processing[documentProcessingService.js]
+  Processing --> Extraction[documentExtractionService.js]
+  Extraction --> LlamaParse[LlamaParse\nPDF -> Markdown]
+
+  AuthService --> Database[(PostgreSQL)]
+  Cache --> Database
+  UploadService --> Database
+  PlanService --> Database
+  AdminService --> Database
+  Extraction --> Database
+
+  AnalyticsAPI --> AnalyticsService[financialAnalyticsService.js]
+  AnalyticsService --> Parser[Markdown or HTML table parser]
+  Parser --> Selector[tableSelector.js]
+  Selector --> Matcher[metricRowMatcher.js]
+  Matcher --> AnalyticsResult[metrics + sections + dataset]
+  AnalyticsAPI --> KeyMetrics[keyMetricsService.js\nprofitLoss requests]
+  AnalyticsResult --> KeyMetrics
+  KeyMetrics --> Snapshot[Canonical financial snapshot]
+  Snapshot --> KeyMetricsResult[key metrics response]
+  AnalyticsResult --> Browser
+  KeyMetricsResult --> Browser
+```
+
+## Request Lifecycles
+
+### Upload And Extraction
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor User
+  participant UI as React frontend
+  participant API as documentRoutes
+  participant Auth as authMiddleware
+  participant Upload as documentUploadService
+  participant DB as PostgreSQL
+  participant Parser as LlamaParse
+
+  User->>UI: Select or drop PDF
+  UI->>API: POST /api/documents/upload
+  API->>Auth: Validate session cookie
+  Auth-->>API: Authenticated user
+  API->>Upload: processDocumentUpload(file, userId)
+  Upload->>Upload: Validate file and calculate hash
+  Upload->>DB: Check cache by file hash
+  alt Existing completed document
+    DB-->>Upload: READY document
+    Upload->>DB: Link document to user
+  else New or retryable document
+    Upload->>DB: Reserve quota and create pending document
+    Upload->>Parser: Parse PDF as Markdown
+    Parser-->>Upload: Markdown pages
+    Upload->>DB: Store extraction_payload.markdown
+    DB-->>Upload: completed document
+  end
+  Upload-->>API: Document status and id
+  API-->>UI: Upload response
+  UI->>API: Request analytics for the document
+```
+
+### Analytics And Key Metrics
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant UI as React frontend
+  participant API as analyticsRoutes
+  participant DB as PostgreSQL
+  participant Engine as financialAnalyticsService
+  participant Tables as Table parsers and selector
+  participant Metrics as keyMetricsService
+
+  UI->>API: POST /api/documents/:id/analytics
+  API->>DB: Read completed extraction_payload.markdown
+  DB-->>API: Markdown + document status
+  API->>Engine: extractFinancialAnalytics(markdown, analyticsType)
+  Engine->>Engine: detectContentType(markdown)
+  Engine->>Tables: Parse tables and normalize cells
+  Tables->>Tables: Score tables against config signals
+  Tables->>Tables: Find sections and configured metric rows
+  Tables-->>Engine: Named metrics, sections, dataset
+  Engine-->>API: Analytics result
+
+  opt analyticsType is profitLoss
+    API->>Engine: Extract assetsBreakdown
+    API->>Engine: Extract liabilitiesBreakdown
+    API->>Metrics: calculateKeyMetrics(merged statement metrics)
+    Metrics->>Metrics: Build canonical snapshot
+    Metrics->>Metrics: Calculate seven key metrics
+    Metrics-->>API: Key metrics with calculation details
+  end
+
+  API-->>UI: Analytics JSON response
+  UI->>UI: Render charts, comparisons, and key metric cards
+```
+
+## Ownership Map
+
+```mermaid
+flowchart TB
+  subgraph Frontend[frontend/src]
+    App[App.jsx\nUI state and API orchestration]
+    Charts[Chart components\nassets, liabilities, profit/loss]
+    KeyMetricView[KeyMetricsGrid]
+    App --> Charts
+    App --> KeyMetricView
+  end
+
+  subgraph API[backend/src/routes]
+    AuthRoute[authRoutes.js]
+    DocumentRoute[documentRoutes.js]
+    AnalyticsRoute[analyticsRoutes.js]
+    AdminRoute[adminRoutes.js]
+    SubscriptionRoute[subscriptionRoutes.js]
+  end
+
+  subgraph Services[backend/src/services]
+    Auth[authService.js]
+    Upload[documentUploadService.js]
+    Process[documentProcessingService.js]
+    Extract[documentExtractionService.js]
+    Analytics[financialAnalyticsService.js]
+    Plans[planService.js]
+  end
+
+  subgraph AnalyticsCore[backend/src/analytics]
+    Configs[configs/*.config.js]
+    Select[core/tableSelector.js]
+    Match[core/metricRowMatcher.js]
+    Key[keyMetricsService.js]
+  end
+
+  subgraph Persistence[Persistence and external systems]
+    Postgres[(PostgreSQL)]
+    Llama[LlamaParse]
+    Files[uploads/ temporary files]
+  end
+
+  App --> AuthRoute
+  App --> DocumentRoute
+  App --> AnalyticsRoute
+  AuthRoute --> Auth
+  DocumentRoute --> Upload
+  AnalyticsRoute --> Analytics
+  AnalyticsRoute --> Key
+  Upload --> Process --> Extract --> Llama
+  Upload --> Files
+  Auth --> Postgres
+  Upload --> Postgres
+  Extract --> Postgres
+  Analytics --> Configs --> Select --> Match
+  Match --> Key
+```
+
+The diagrams show the primary production path. Market data, OCR proof-of-concept routes, subscription checkout, and admin operations are connected through `server.js` but are intentionally kept outside the core PDF-to-analytics path.
 
 ## Flow
 

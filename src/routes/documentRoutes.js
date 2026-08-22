@@ -4,6 +4,7 @@ import multer from "multer";
 import {
     processDocumentUpload
 } from "../services/documentUploadService.js";
+import { removeUploadedFile } from "../services/fileUploadService.js";
 import { getUserDocuments } from "../services/userDocumentService.js";
 import { requireAuth } from "../middleware/authMiddleware.js";
 import { getUserUploadQuota } from "../services/planService.js";
@@ -13,7 +14,12 @@ const router = express.Router();
 
 
 const upload = multer({
-    dest: "uploads/"
+    dest: "uploads/",
+    limits: { fileSize: 25 * 1024 * 1024 },
+    fileFilter: (req, file, callback) => {
+        const isPdf = file.mimetype === "application/pdf" || file.originalname.toLowerCase().endsWith(".pdf");
+        callback(isPdf ? null : new Error("Only PDF uploads are accepted."), isPdf);
+    }
 });
 
 const uploadWithDebug = (req, res, next) => {
@@ -241,8 +247,67 @@ router.post(
 
             });
 
+        } finally {
+
+            removeUploadedFile(req.file?.path);
+
         }
 
+    }
+);
+
+router.post(
+    "/upload-batch",
+    requireAuth,
+    upload.array("files[]"),
+    async (req, res) => {
+        if (!req.files?.length) {
+            return res.status(400).json({
+                success: false,
+                error: "At least one PDF file is required."
+            });
+        }
+
+        console.log("[UPLOAD_BATCH] received", { count: req.files.length });
+
+        const documents = [];
+
+        for (const file of req.files) {
+            try {
+                const result = await processDocumentUpload({
+                    file,
+                    userId: req.user.userId
+                });
+
+                documents.push({
+                    documentId: result.document?.id ?? null,
+                    filename: file.originalname,
+                    status: result.action === "WAIT" ? "processing" : result.action === "FAILED" ? "failed" : "completed",
+                    fromCache: result.action === "REUSE",
+                    ...(result.error ? { error: result.error } : {})
+                });
+                console.log("[UPLOAD_BATCH] document", {
+                    filename: file.originalname,
+                    status: result.action,
+                    fromCache: result.action === "REUSE"
+                });
+            } catch (error) {
+                documents.push({
+                    documentId: null,
+                    filename: file.originalname,
+                    status: "failed",
+                    fromCache: false,
+                    error: error?.message ?? String(error)
+                });
+            } finally {
+                removeUploadedFile(file.path);
+            }
+        }
+
+        return res.json({
+            success: true,
+            documents
+        });
     }
 );
 

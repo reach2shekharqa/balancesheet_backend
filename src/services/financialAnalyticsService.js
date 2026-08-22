@@ -127,6 +127,17 @@ function extractTablesFromContent(content) {
     return extractHtmlTables(content);
 }
 
+ function detectReportingUnit(table, content = "") {
+    const tableText = (table?.rows ?? [])
+        .flatMap(row => row ?? [])
+        .map(cell => String(cell?.text ?? ""))
+        .join(" ");
+    const unitPattern = /(?:₹|rs\.?|inr)\s*(?:in\s*)?(?:thousands?|lakhs?|lacs?|crores?|millions?|billions?)|(?:in|amounts?\s+in|figures?\s+in)\s+(?:₹|rs\.?|inr\s*)?(?:thousands?|lakhs?|lacs?|crores?|millions?|billions?)|(?:thousands?|lakhs?|lacs?|crores?|millions?|billions?)\s*(?:of\s+)?(?:₹|rs\.?|inr)/i;
+    const match = `${tableText} ${content}`.match(unitPattern)?.[0];
+
+    return match ? match.replace(/\s+/g, " ").trim() : null;
+}
+
 
 /* =========================================================
    PARSE FINANCIAL NUMBER
@@ -744,7 +755,6 @@ export async function extractFinancialAnalytics({
 
     return {
         analyticsType,
-
         table: {
             tableIndex:
                 selectedTable.tableIndex,
@@ -1108,7 +1118,6 @@ export async function extractFinancialAnalytics({
     return {
 
         analyticsType,
-
         table: {
 
             tableIndex:

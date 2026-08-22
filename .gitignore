@@ -61,3 +61,4 @@ debug/
 !.env.example
 ocr-test-files/
 *.pdf
+kt/
