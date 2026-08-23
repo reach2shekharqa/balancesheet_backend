@@ -1,6 +1,7 @@
 import {
     calculateFileHash,
-    getDocumentCacheStatus
+    getDocumentCacheStatus,
+    findReadyDocumentByHash
 } from "./documentCacheService.js";
 
 import { pool } from "../db/db.js";
@@ -31,11 +32,13 @@ import {
 
 
 
-export async function checkUploadedDocument(filePath) {
+export async function checkUploadedDocument(filePath, authorization) {
 
     const fileHash = calculateFileHash(filePath);
 
-    const cache = await getDocumentCacheStatus(fileHash);
+    const cache = await getDocumentCacheStatus(fileHash, authorization.type === "COMPANY"
+        ? { companyId: authorization.companyId }
+        : { independent: true, userId: authorization.userId });
 
     if (cache.status === "READY") {
 
@@ -99,7 +102,9 @@ export async function createPendingDocument({
         )
         VALUES ($1, $2, $3, $4, $5, 'pending')
 
-        ON CONFLICT (file_hash)
+        ON CONFLICT ${companyId === null
+            ? "(user_id, file_hash) WHERE company_id IS NULL AND user_id IS NOT NULL"
+            : "(company_id, file_hash) WHERE company_id IS NOT NULL"}
         DO NOTHING
 
         RETURNING
@@ -152,9 +157,10 @@ export async function createPendingDocument({
             extraction_payload,
             created_at
         FROM documents
-        WHERE file_hash = $1
+                WHERE file_hash = $1
+                    AND ${companyId === null ? "company_id IS NULL AND user_id = $2" : "company_id = $2"}
         `,
-        [fileHash]
+                [fileHash, companyId === null ? userId : companyId]
     );
 
 
@@ -317,7 +323,10 @@ async function processDocumentUploadPipeline({
         "[UPLOAD DEBUG] checking document cache"
     );
 
-    const cache = prepared?.cache ?? await checkUploadedDocument(fileInfo.filePath);
+    const cache = prepared?.cache ?? await checkUploadedDocument(fileInfo.filePath, {
+        ...authorization,
+        userId
+    });
 
     assertCachedDocumentAuthorized(cache.document, authorization);
 
@@ -342,6 +351,22 @@ async function processDocumentUploadPipeline({
      * CACHE HIT - READY
      * =====================================================
      */
+
+    let parsed = prepared?.parsed ?? null;
+    if (authorization.type === "INDEPENDENT") {
+        if (parsed) {
+            assertIndependentCin({ extraction_payload: { markdown: parsed?.markdown } });
+        } else if (["REUSE", "RETRY"].includes(cache.action) && cache.document?.extraction_payload) {
+            assertIndependentCin(cache.document);
+        } else {
+            const readySource = await findReadyDocumentByHash(fileInfo.fileHash);
+            const payload = readySource?.extraction_payload;
+            parsed = payload?.markdown
+                ? { markdown: payload.markdown, pageCount: payload.pageCount }
+                : await parsePdfWithLlamaParse(fileInfo.filePath);
+            assertIndependentCin({ extraction_payload: { markdown: parsed?.markdown } });
+        }
+    }
 
     if (cache.action === "REUSE") {
 
@@ -437,7 +462,6 @@ async function processDocumentUploadPipeline({
      * =====================================================
      */
 
-    let parsed;
     if (authorization.type === "COMPANY") {
         parsed = prepared?.parsed ?? await parsePdfWithLlamaParse(fileInfo.filePath);
         assertCompanyCin({ extraction_payload: { markdown: parsed?.markdown } }, authorization);
@@ -639,6 +663,16 @@ export function assertCompanyCin(document, authorization) {
     }
 }
 
+export function assertIndependentCin(document) {
+    const identity = extractIdentityFromDocument(document);
+    if (!identity.cin) {
+        const error = new Error("The uploaded document must contain a valid CIN.");
+        error.status = 400;
+        error.code = "DOCUMENT_CIN_REQUIRED";
+        throw error;
+    }
+}
+
 async function reserveQuotaOrThrow(userId) {
     const reservation = await reserveUploadQuota(userId);
 
@@ -691,7 +725,10 @@ export async function prepareCompanyUploadBatch({ files, userId, authorization }
     try {
         for (const file of files) {
             const fileInfo = await processUploadedFile(file);
-            const cache = await checkUploadedDocument(fileInfo.filePath);
+            const cache = await checkUploadedDocument(fileInfo.filePath, {
+                ...authorization,
+                userId
+            });
             assertCachedDocumentAuthorized(cache.document, authorization);
             let parsed = null;
             if (cache.action === "REUSE" || cache.action === "RETRY") {
