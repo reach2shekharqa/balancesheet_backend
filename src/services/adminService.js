@@ -68,21 +68,41 @@ export async function listUsers({ search = "", filter = "all" } = {}) {
     if (filter === "admin" || filter === "user") { params.push(filter); filters.push(`u.role = $${params.length}`); }
     const result = await pool.query(`
         SELECT u.user_id AS "userId", u.user_name AS "userName", u.email, u.role, u.uploads_used AS "uploadsUsed",
-               u.upload_quota AS "uploadLimit", u.storage_used_mb AS "storageUsedMb", u.storage_limit_mb AS "storageLimitMb",
+               u.upload_count AS "uploadCount", u.upload_limit_mb AS "uploadLimitMb",
+               COALESCE(p.upload_quota, u.upload_quota, 1)::int AS "uploadQuota",
+               u.upload_quota AS "configuredUploadQuota", u.storage_used_mb AS "storageUsedMb", u.storage_limit_mb AS "storageLimitMb",
                u.is_active AS "isActive", u.is_deleted AS "isDeleted", u.created_at AS "createdAt",
                CASE WHEN u.is_deleted OR NOT u.is_active THEN '[]'::json ELSE COALESCE((SELECT json_agg(json_build_object('companyId', c.id, 'companyName', c.company_name, 'accessRole', cu.access_role) ORDER BY c.company_name) FROM company_users cu JOIN companies c ON c.id = cu.company_id WHERE cu.user_id = u.user_id AND c.is_active = TRUE), '[]'::json) END AS companies
-        FROM users u ${filters.length ? `WHERE ${filters.join(" AND ")}` : ""} ORDER BY u.created_at DESC`, params);
+                FROM users u
+                LEFT JOIN LATERAL (
+                        SELECT p.upload_quota
+                        FROM user_subscriptions s JOIN plans p ON p.id = s.plan_id AND p.is_active = TRUE
+                        WHERE s.user_id = u.user_id AND s.status = 'active'
+                            AND (s.expires_at IS NULL OR s.expires_at > NOW())
+                        ORDER BY s.started_at DESC LIMIT 1
+                ) p ON TRUE
+                ${filters.length ? `WHERE ${filters.join(" AND ")}` : ""} ORDER BY u.created_at DESC`, params);
     return result.rows;
 }
 
 export async function getUser(userId) {
     assertUserId(userId);
     const user = await pool.query(`
-        SELECT user_id AS "userId", user_name AS "userName", email, role, is_active AS "isActive", is_deleted AS "isDeleted",
-               created_at AS "createdAt", updated_at AS "updatedAt", uploads_used AS "uploadsUsed", upload_quota AS "uploadLimit",
-               storage_used_mb AS "storageUsedMb", storage_limit_mb AS "storageLimitMb", NULL AS "lastSignInAt",
+         SELECT u.user_id AS "userId", u.user_name AS "userName", u.email, u.role, u.is_active AS "isActive", u.is_deleted AS "isDeleted",
+             u.created_at AS "createdAt", u.updated_at AS "updatedAt", u.uploads_used AS "uploadsUsed",
+             u.upload_count AS "uploadCount", u.upload_limit_mb AS "uploadLimitMb",
+             COALESCE(p.upload_quota, u.upload_quota, 1)::int AS "uploadQuota",
+             u.upload_quota AS "configuredUploadQuota", u.storage_used_mb AS "storageUsedMb", u.storage_limit_mb AS "storageLimitMb", NULL AS "lastSignInAt",
                deleted_at AS "deletedAt", deleted_by AS "deletedBy", deletion_reason AS "deletionReason"
-        FROM users WHERE user_id = $1`, [userId]);
+         FROM users u
+         LEFT JOIN LATERAL (
+             SELECT p.upload_quota
+             FROM user_subscriptions s JOIN plans p ON p.id = s.plan_id AND p.is_active = TRUE
+             WHERE s.user_id = u.user_id AND s.status = 'active'
+            AND (s.expires_at IS NULL OR s.expires_at > NOW())
+             ORDER BY s.started_at DESC LIMIT 1
+         ) p ON TRUE
+         WHERE u.user_id = $1`, [userId]);
     if (!user.rows[0]) return null;
     const documents = await pool.query(`SELECT id, original_filename AS "originalFilename", file_size_mb AS "fileSizeMb", extraction_status AS "status", uploaded_at AS "uploadedAt" FROM documents WHERE user_id = $1 ORDER BY uploaded_at DESC`, [userId]);
     const companies = await listUserCompanies(userId);
@@ -255,6 +275,56 @@ export async function deleteDocument({ actorId, documentId }) {
         await client.query(`DELETE FROM documents WHERE id = $1`, [documentId]);
         await writeAudit(client, { actorId, action: "DOCUMENT_DELETED", targetType: "document", targetId: documentId, changes: { userId: document.rows[0].user_id } });
         await client.query("COMMIT");
+    } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+}
+
+export async function clearUserData({ actorId, userId }) {
+    assertUserId(userId);
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+        const user = await client.query(`SELECT user_id FROM users WHERE user_id = $1 FOR UPDATE`, [userId]);
+        if (!user.rows[0]) throw new Error("User not found");
+
+        const documents = await client.query(`SELECT id FROM documents WHERE user_id = $1 FOR UPDATE`, [userId]);
+        const documentIds = documents.rows.map(row => row.id);
+        const documentParams = [documentIds];
+        const deleted = {};
+        const deleteByDocumentId = async (table) => {
+            const result = await client.query(`DELETE FROM ${table} WHERE document_id = ANY($1::bigint[])`, documentParams);
+            deleted[table] = result.rowCount;
+        };
+
+        await deleteByDocumentId("document_rows");
+        await deleteByDocumentId("financial_metrics");
+        await deleteByDocumentId("calculated_metrics");
+        await deleteByDocumentId("metric_variance_alerts");
+        const rowChanges = await client.query(`DELETE FROM row_change_log WHERE document_id = ANY($1::bigint[]) OR previous_document_id = ANY($1::bigint[])`, documentParams);
+        deleted.row_change_log = rowChanges.rowCount;
+        const userDocuments = await client.query(`DELETE FROM user_documents WHERE user_id = $1 OR document_id = ANY($2::bigint[])`, [userId, documentIds]);
+        deleted.user_documents = userDocuments.rowCount;
+        const storageLogs = await client.query(`DELETE FROM user_storage_logs WHERE user_id = $1 OR extraction_id = ANY($2::bigint[])`, [userId, documentIds]);
+        deleted.user_storage_logs = storageLogs.rowCount;
+        const tables = await client.query(`DELETE FROM document_tables WHERE document_id = ANY($1::bigint[])`, documentParams);
+        deleted.document_tables = tables.rowCount;
+        const removedDocuments = await client.query(`DELETE FROM documents WHERE user_id = $1 RETURNING id`, [userId]);
+        deleted.documents = removedDocuments.rowCount;
+
+        await client.query(`UPDATE users SET uploads_used = 0, upload_count = 0, storage_used_mb = 0, updated_at = NOW() WHERE user_id = $1`, [userId]);
+        const summary = {
+            documents: deleted.documents,
+            financialMetrics: deleted.financial_metrics,
+            documentRows: deleted.document_rows,
+            documentTables: deleted.document_tables,
+            calculatedMetrics: deleted.calculated_metrics,
+            metricVarianceAlerts: deleted.metric_variance_alerts,
+            rowChangeLog: deleted.row_change_log,
+            userDocuments: deleted.user_documents,
+            userStorageLogs: deleted.user_storage_logs
+        };
+        await writeAudit(client, { actorId, action: "CLEAR_USER_DATA", targetType: "user", targetId: userId, changes: summary });
+        await client.query("COMMIT");
+        return summary;
     } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
 }
 

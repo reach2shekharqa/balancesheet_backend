@@ -2,7 +2,7 @@ import express from "express";
 import { requireAuth } from "../middleware/authMiddleware.js";
 import { requireAdmin } from "../middleware/adminMiddleware.js";
 import { pool } from "../db/db.js";
-import { addCompanyAccess, changeCompanyAccessRole, changeRole, createUser, deleteDocument, getDashboard, getUser, listCompanies, listDocuments, listUserCompanies, listUsers, parseNonNegativeInteger, removeCompanyAccess, softDeleteUser, updateUser } from "../services/adminService.js";
+import { addCompanyAccess, changeCompanyAccessRole, changeRole, clearUserData, createUser, deleteDocument, getDashboard, getUser, listCompanies, listDocuments, listUserCompanies, listUsers, parseNonNegativeInteger, removeCompanyAccess, softDeleteUser, updateUser } from "../services/adminService.js";
 
 const router = express.Router();
 router.use(requireAuth, requireAdmin);
@@ -26,6 +26,7 @@ router.patch("/users/:userId/role", async (req, res) => { try { return res.json(
 router.patch("/users/:userId/status", async (req, res) => { try { if (typeof req.body?.isActive !== "boolean") throw new Error("Invalid active status"); return res.json({ user: await updateUser({ actorId: req.user.userId, userId: req.params.userId, field: "is_active", value: req.body.isActive, action: req.body.isActive ? "USER_ACTIVATED" : "USER_DEACTIVATED" }) }); } catch (error) { return sendError(res, error); } });
 router.patch("/users/:userId/quota", async (req, res) => { try { return res.json({ user: await updateUser({ actorId: req.user.userId, userId: req.params.userId, field: "upload_quota", value: parseNonNegativeInteger(req.body?.uploadLimit, "upload limit"), action: "USER_QUOTA_CHANGED" }) }); } catch (error) { return sendError(res, error); } });
 router.patch("/users/:userId/storage", async (req, res) => { try { return res.json({ user: await updateUser({ actorId: req.user.userId, userId: req.params.userId, field: "storage_limit_mb", value: parseNonNegativeInteger(req.body?.storageLimitMb, "storage limit"), action: "USER_STORAGE_LIMIT_CHANGED" }) }); } catch (error) { return sendError(res, error); } });
+router.delete("/users/:userId/data", async (req, res) => { try { return res.json({ success: true, deleted: await clearUserData({ actorId: req.user.userId, userId: req.params.userId }) }); } catch (error) { return sendError(res, error); } });
 router.delete("/users/:userId", async (req, res) => { try { await softDeleteUser({ actorId: req.user.userId, userId: req.params.userId, reason: req.body?.reason }); return res.json({ success: true }); } catch (error) { return sendError(res, error); } });
 router.get("/documents", async (req, res) => { try { return res.json({ documents: await listDocuments(req.query) }); } catch (error) { return sendError(res, error); } });
 router.delete("/documents/:documentId", async (req, res) => { try { await deleteDocument({ actorId: req.user.userId, documentId: req.params.documentId }); return res.json({ success: true }); } catch (error) { return sendError(res, error); } });

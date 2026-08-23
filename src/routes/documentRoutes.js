@@ -388,7 +388,13 @@ router.post(
                     filename: file.originalname,
                     status: "failed",
                     fromCache: false,
-                    error: error?.message ?? String(error)
+                    error: error?.message ?? String(error),
+                    ...(error?.code ? { code: error.code } : {}),
+                    ...(error?.details ? {
+                        plan: error.details.plan,
+                        uploadsUsed: error.details.uploads_used,
+                        uploadQuota: error.details.upload_quota
+                    } : {})
                 });
             } finally {
                 removeUploadedFile(file.path);
