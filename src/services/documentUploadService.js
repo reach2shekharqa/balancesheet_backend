@@ -18,6 +18,10 @@ import {
     processPendingDocument
 } from "./documentProcessingService.js";
 
+import { parsePdfWithLlamaParse } from "./llamaParseService.js";
+import { extractIdentityFromDocument } from "./companyIdentityService.js";
+import { authorizeDocumentUpload, assertCachedDocumentAuthorized, cinMismatch } from "./uploadAuthorizationService.js";
+
 import {
     getUserUploadQuota,
     releaseUploadQuota,
@@ -78,6 +82,7 @@ export async function checkUploadedDocument(filePath) {
 export async function createPendingDocument({
     fileHash,
     userId,
+    companyId = null,
     originalFilename,
     fileSizeMb
 }) {
@@ -89,9 +94,10 @@ export async function createPendingDocument({
             original_filename,
             user_id,
             file_size_mb,
+            company_id,
             extraction_status
         )
-        VALUES ($1, $2, $3, $4, 'pending')
+        VALUES ($1, $2, $3, $4, $5, 'pending')
 
         ON CONFLICT (file_hash)
         DO NOTHING
@@ -102,6 +108,7 @@ export async function createPendingDocument({
             original_filename,
             user_id,
             file_size_mb,
+            company_id,
             extraction_status,
             created_at
         `,
@@ -109,7 +116,8 @@ export async function createPendingDocument({
             fileHash,
             originalFilename,
             userId,
-            fileSizeMb
+            fileSizeMb,
+            companyId
         ]
     );
 
@@ -139,6 +147,7 @@ export async function createPendingDocument({
             original_filename,
             user_id,
             file_size_mb,
+            company_id,
             extraction_status,
             extraction_payload,
             created_at
@@ -268,6 +277,9 @@ async function retryFailedDocument({
 async function processDocumentUploadPipeline({
     file,
     userId,
+    companyId = null,
+    authorization,
+    prepared = null,
     onQuotaReserved
 }) {
 
@@ -284,8 +296,7 @@ async function processDocumentUploadPipeline({
         "[UPLOAD DEBUG] starting file processing"
     );
 
-    const fileInfo =
-        await processUploadedFile(file);
+    const fileInfo = prepared?.fileInfo ?? await processUploadedFile(file);
 
     console.log(
         "[UPLOAD DEBUG] file processing completed",
@@ -305,10 +316,9 @@ async function processDocumentUploadPipeline({
         "[UPLOAD DEBUG] checking document cache"
     );
 
-    const cache =
-        await checkUploadedDocument(
-            fileInfo.filePath
-        );
+    const cache = prepared?.cache ?? await checkUploadedDocument(fileInfo.filePath);
+
+    assertCachedDocumentAuthorized(cache.document, authorization);
 
     console.log(cache.action === "REUSE" ? "[CACHE] hit" : `[CACHE] ${cache.action.toLowerCase()}`, {
         filename: fileInfo.originalFilename,
@@ -333,6 +343,8 @@ async function processDocumentUploadPipeline({
      */
 
     if (cache.action === "REUSE") {
+
+        assertCompanyCin(cache.document, authorization);
 
         console.log(
             "[UPLOAD DEBUG] CACHE REUSE"
@@ -407,6 +419,8 @@ async function processDocumentUploadPipeline({
 
     if (cache.action === "RETRY") {
 
+        assertCompanyCin(cache.document, authorization);
+
         await reserveQuotaOrThrow(userId);
         onQuotaReserved();
 
@@ -425,6 +439,12 @@ async function processDocumentUploadPipeline({
      * =====================================================
      */
 
+    let parsed;
+    if (authorization.type === "COMPANY") {
+        parsed = prepared?.parsed ?? await parsePdfWithLlamaParse(fileInfo.filePath);
+        assertCompanyCin({ extraction_payload: { markdown: parsed?.markdown } }, authorization);
+    }
+
     await reserveQuotaOrThrow(userId);
     onQuotaReserved();
 
@@ -432,6 +452,7 @@ async function processDocumentUploadPipeline({
         await createPendingDocument({
             fileHash: fileInfo.fileHash,
             userId,
+            companyId,
             originalFilename: fileInfo.originalFilename,
             fileSizeMb: fileInfo.fileSizeMb
         });
@@ -452,6 +473,13 @@ async function processDocumentUploadPipeline({
         throw new Error(
             "Document could not be created or retrieved."
         );
+    }
+
+    if (!created.created) {
+        assertCachedDocumentAuthorized(document, authorization);
+        if (["completed", "failed"].includes(document.extraction_status)) {
+            assertCompanyCin(document, authorization);
+        }
     }
 
 
@@ -549,13 +577,13 @@ async function processDocumentUploadPipeline({
  */
 
 const extraction =
-    await processPendingDocument({
+        await processPendingDocument({
 
         documentId:
             document.id,
 
-        filePath:
-            fileInfo.filePath
+            filePath: fileInfo.filePath,
+            parsed
 
     });
 
@@ -575,7 +603,6 @@ if (extraction.success) {
     };
 
 }
-
 
 /*
  * LlamaParse failed.
@@ -604,6 +631,14 @@ return {
 
 }
 
+export function assertCompanyCin(document, authorization) {
+    if (authorization.type !== "COMPANY") return;
+    const identity = extractIdentityFromDocument(document);
+    if (!identity.cin || identity.cin !== String(authorization.companyCin).replace(/[\s:;,#|/\-]+/g, "").toUpperCase()) {
+        throw cinMismatch();
+    }
+}
+
 async function reserveQuotaOrThrow(userId) {
     const reservation = await reserveUploadQuota(userId);
 
@@ -619,13 +654,17 @@ async function reserveQuotaOrThrow(userId) {
     throw error;
 }
 
-export async function processDocumentUpload({ file, userId }) {
+export async function processDocumentUpload({ file, userId, companyId = null, authorization = null, prepared = null }) {
     let quotaReserved = false;
 
     try {
+        const uploadAuthorization = authorization ?? await authorizeDocumentUpload({ userId, companyId });
         const result = await processDocumentUploadPipeline({
             file,
             userId,
+            companyId,
+            authorization: uploadAuthorization,
+            prepared,
             onQuotaReserved: () => {
                 quotaReserved = true;
             }
@@ -638,6 +677,31 @@ export async function processDocumentUpload({ file, userId }) {
         if (quotaReserved) {
             await releaseUploadQuota(userId);
         }
+        throw error;
+    }
+}
+
+export async function prepareCompanyUploadBatch({ files, userId, authorization }) {
+    if (authorization.type !== "COMPANY") return files.map(file => ({ file }));
+
+    const prepared = [];
+    try {
+        for (const file of files) {
+            const fileInfo = await processUploadedFile(file);
+            const cache = await checkUploadedDocument(fileInfo.filePath);
+            assertCachedDocumentAuthorized(cache.document, authorization);
+            let parsed = null;
+            if (cache.action === "REUSE" || cache.action === "RETRY") {
+                assertCompanyCin(cache.document, authorization);
+            } else if (cache.action === "PARSE") {
+                parsed = await parsePdfWithLlamaParse(fileInfo.filePath);
+                assertCompanyCin({ extraction_payload: { markdown: parsed?.markdown } }, authorization);
+            }
+            prepared.push({ fileInfo, cache, parsed });
+        }
+        return prepared;
+    } catch (error) {
+        for (const item of prepared) removeUploadedFile(item.fileInfo?.filePath);
         throw error;
     }
 }

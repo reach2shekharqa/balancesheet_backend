@@ -2,13 +2,16 @@ import express from "express";
 import multer from "multer";
 
 import {
-    processDocumentUpload
+    processDocumentUpload,
+    prepareCompanyUploadBatch
 } from "../services/documentUploadService.js";
 import { removeUploadedFile } from "../services/fileUploadService.js";
 import { getUserDocuments } from "../services/userDocumentService.js";
 import { requireAuth } from "../middleware/authMiddleware.js";
 import { getUserUploadQuota } from "../services/planService.js";
 import { extractIdentityFromDocument } from "../services/companyIdentityService.js";
+import { getAccessibleDocumentsByHashes, hasCompanyAccess } from "../services/companyAccessService.js";
+import { authorizeDocumentUpload } from "../services/uploadAuthorizationService.js";
 
 
 const router = express.Router();
@@ -107,6 +110,25 @@ const uploadWithDebug = (req, res, next) => {
     });
 };
 
+async function requireCompanyUploadOwner(req, res, next) {
+    const companyId = req.body?.companyId;
+    try {
+        req.uploadAuthorization = await authorizeDocumentUpload({
+            userId: req.user.userId,
+            companyId
+        });
+        return next();
+    } catch (error) {
+        removeUploadedFile(req.file?.path);
+        for (const file of req.files ?? []) removeUploadedFile(file.path);
+        console.error("[UPLOAD AUTH] company permission check failed", { message: error?.message });
+        return res.status(error?.status ?? 500).json({
+            success: false,
+            error: error?.status ? error.message : "Unable to verify company upload permission."
+        });
+    }
+}
+
 router.get(
     "/quota",
     requireAuth,
@@ -141,10 +163,16 @@ router.get(
                 userId: req.user?.userId
             });
 
-            console.log("[DOCUMENTS DEBUG] calling getUserDocuments");
+            const companyId = req.query.companyId ?? null;
+            if (companyId !== null && !(await hasCompanyAccess({ userId: req.user.userId, companyId }))) {
+                return res.status(403).json({ success: false, error: "You are not authorized to access this company." });
+            }
+
+            console.log("[DOCUMENTS DEBUG] calling getUserDocuments", { companyId });
 
             const documents = await getUserDocuments({
-                userId: req.user.userId
+                userId: req.user.userId,
+                companyId
             });
 
             console.log("[DOCUMENTS DEBUG] getUserDocuments completed", {
@@ -185,24 +213,19 @@ router.post(
         }
 
         try {
-            const result = await pool.query(
-                `
-                SELECT d.id, d.file_hash, d.original_filename, d.extraction_status, d.extraction_payload
-                FROM documents d
-                INNER JOIN user_documents ud ON ud.document_id = d.id AND ud.user_id = $1
-                WHERE d.file_hash = ANY($2::text[])
-                  AND d.extraction_status = 'completed'
-                  AND d.extraction_payload IS NOT NULL
-                `,
-                [req.user.userId, fileHashes]
-            );
+            const documents = await getAccessibleDocumentsByHashes({
+                userId: req.user.userId,
+                fileHashes
+            });
             return res.json({
                 success: true,
-                documents: result.rows.map(document => ({
+                documents: documents
+                    .filter(document => document.extraction_status === "completed" && document.extraction_payload != null)
+                    .map(document => ({
                     fileHash: document.file_hash,
                     filename: document.original_filename,
                     identity: extractIdentityFromDocument(document)
-                }))
+                    }))
             });
         } catch (error) {
             console.error("[IDENTITY] cache lookup failed", { message: error?.message, stack: error?.stack });
@@ -216,6 +239,7 @@ router.post(
     "/upload",
     requireAuth,
     uploadWithDebug,
+    requireCompanyUploadOwner,
     async (req, res) => {
 
         try {
@@ -231,6 +255,7 @@ router.post(
 
 
             const userId = req.user.userId;
+            const companyId = req.body?.companyId || null;
 
 
             const result =
@@ -238,7 +263,9 @@ router.post(
 
                     file: req.file,
 
-                    userId
+                    userId,
+                    companyId,
+                    authorization: req.uploadAuthorization
 
                 });
 
@@ -266,6 +293,13 @@ router.post(
                     uploadsUsed: error.details.uploads_used,
                     uploadQuota: error.details.upload_quota,
                     upgradeRequired: error.details.plan !== "PLAN_250"
+                });
+            }
+
+            if (error?.status === 400 || error?.status === 403 || error?.status === 409) {
+                return res.status(error.status).json({
+                    success: false,
+                    error: error.message
                 });
             }
 
@@ -297,6 +331,7 @@ router.post(
     "/upload-batch",
     requireAuth,
     upload.array("files[]"),
+    requireCompanyUploadOwner,
     async (req, res) => {
         if (!req.files?.length) {
             return res.status(400).json({
@@ -306,14 +341,33 @@ router.post(
         }
 
         console.log("[UPLOAD_BATCH] received", { count: req.files.length });
+        const companyId = req.body?.companyId;
+
+        let prepared;
+        try {
+            prepared = await prepareCompanyUploadBatch({
+                files: req.files,
+                userId: req.user.userId,
+                authorization: req.uploadAuthorization
+            });
+        } catch (error) {
+            for (const file of req.files) removeUploadedFile(file.path);
+            return res.status(error?.status ?? 500).json({
+                success: false,
+                error: error?.status ? error.message : "Unable to verify the uploaded documents."
+            });
+        }
 
         const documents = [];
 
-        for (const file of req.files) {
+        for (const [index, file] of req.files.entries()) {
             try {
                 const result = await processDocumentUpload({
                     file,
-                    userId: req.user.userId
+                    userId: req.user.userId,
+                    companyId,
+                    authorization: req.uploadAuthorization,
+                    prepared: prepared[index]
                 });
 
                 documents.push({

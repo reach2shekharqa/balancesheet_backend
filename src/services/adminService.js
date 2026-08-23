@@ -1,8 +1,12 @@
 import { pool } from "../db/db.js";
+import bcrypt from "bcryptjs";
+import crypto from "node:crypto";
 
 const USER_ID_PATTERN = /^[A-Za-z0-9_-]{1,120}$/;
 const DOCUMENT_ID_PATTERN = /^\d+$/;
 const ALLOWED_ROLES = new Set(["user", "admin"]);
+const ACCESS_ROLES = new Set(["OWNER", "CONSUMER"]);
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function assertUserId(userId) {
     if (typeof userId !== "string" || !USER_ID_PATTERN.test(userId)) throw new Error("Invalid user ID");
@@ -10,6 +14,14 @@ function assertUserId(userId) {
 
 function assertDocumentId(documentId) {
     if (!DOCUMENT_ID_PATTERN.test(String(documentId))) throw new Error("Invalid document ID");
+}
+
+function assertCompanyId(companyId) {
+    if (!/^\d+$/.test(String(companyId)) || Number(companyId) <= 0) throw new Error("Invalid company ID");
+}
+
+function assertAccessRole(accessRole) {
+    if (!ACCESS_ROLES.has(accessRole)) throw new Error("Invalid access role");
 }
 
 function parseNonNegativeInteger(value, label) {
@@ -57,7 +69,8 @@ export async function listUsers({ search = "", filter = "all" } = {}) {
     const result = await pool.query(`
         SELECT u.user_id AS "userId", u.user_name AS "userName", u.email, u.role, u.uploads_used AS "uploadsUsed",
                u.upload_quota AS "uploadLimit", u.storage_used_mb AS "storageUsedMb", u.storage_limit_mb AS "storageLimitMb",
-               u.is_active AS "isActive", u.is_deleted AS "isDeleted", u.created_at AS "createdAt"
+               u.is_active AS "isActive", u.is_deleted AS "isDeleted", u.created_at AS "createdAt",
+               CASE WHEN u.is_deleted OR NOT u.is_active THEN '[]'::json ELSE COALESCE((SELECT json_agg(json_build_object('companyId', c.id, 'companyName', c.company_name, 'accessRole', cu.access_role) ORDER BY c.company_name) FROM company_users cu JOIN companies c ON c.id = cu.company_id WHERE cu.user_id = u.user_id AND c.is_active = TRUE), '[]'::json) END AS companies
         FROM users u ${filters.length ? `WHERE ${filters.join(" AND ")}` : ""} ORDER BY u.created_at DESC`, params);
     return result.rows;
 }
@@ -72,7 +85,104 @@ export async function getUser(userId) {
         FROM users WHERE user_id = $1`, [userId]);
     if (!user.rows[0]) return null;
     const documents = await pool.query(`SELECT id, original_filename AS "originalFilename", file_size_mb AS "fileSizeMb", extraction_status AS "status", uploaded_at AS "uploadedAt" FROM documents WHERE user_id = $1 ORDER BY uploaded_at DESC`, [userId]);
-    return { ...user.rows[0], documents: documents.rows };
+    const companies = await listUserCompanies(userId);
+    return { ...user.rows[0], companies: user.rows[0].isDeleted ? [] : companies, documents: documents.rows };
+}
+
+export async function listCompanies() {
+    const result = await pool.query(`SELECT id AS "companyId", company_name AS "companyName", cin FROM companies WHERE is_active = TRUE ORDER BY company_name`);
+    return result.rows;
+}
+
+export async function listUserCompanies(userId) {
+    assertUserId(userId);
+    const result = await pool.query(`
+        SELECT c.id AS "companyId", c.company_name AS "companyName", c.cin, cu.access_role AS "accessRole"
+        FROM company_users cu JOIN companies c ON c.id = cu.company_id
+        JOIN users u ON u.user_id = cu.user_id
+        WHERE cu.user_id = $1 AND u.is_active = TRUE AND u.is_deleted = FALSE AND c.is_active = TRUE
+        ORDER BY c.company_name`, [userId]);
+    return result.rows;
+}
+
+async function lockMembershipTarget(client, userId, companyId) {
+    assertUserId(userId);
+    assertCompanyId(companyId);
+    const user = await client.query(`SELECT user_id, is_active, is_deleted FROM users WHERE user_id = $1 FOR UPDATE`, [userId]);
+    if (!user.rows[0]) throw new Error("User not found");
+    if (user.rows[0].is_deleted || user.rows[0].is_active === false) throw new Error("Cannot manage access for an inactive or deleted user");
+    const company = await client.query(`SELECT id FROM companies WHERE id = $1 AND is_active = TRUE FOR UPDATE`, [companyId]);
+    if (!company.rows[0]) throw new Error("Company not found");
+}
+
+export async function createUser({ actorId, userName, email, password }) {
+    const name = String(userName ?? "").trim();
+    const normalizedEmail = String(email ?? "").trim().toLowerCase();
+    if (name.length < 2 || name.length > 200) throw new Error("Invalid user name");
+    if (!EMAIL_PATTERN.test(normalizedEmail)) throw new Error("Invalid email");
+    if (typeof password !== "string" || password.length < 8) throw new Error("Password must be at least 8 characters");
+    const passwordHash = await bcrypt.hash(password, 12);
+    const userId = `usr_${crypto.randomUUID()}`;
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+        const result = await client.query(`INSERT INTO users (user_id, user_name, email, password, role) VALUES ($1, $2, $3, $4, 'user') RETURNING user_id AS "userId", user_name AS "userName", email, role`, [userId, name, normalizedEmail, passwordHash]);
+        await writeAudit(client, { actorId, action: "USER_CREATED", targetType: "user", targetId: userId, changes: { role: "user" } });
+        await client.query("COMMIT");
+        return result.rows[0];
+    } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+}
+
+export async function addCompanyAccess({ actorId, userId, companyId, accessRole }) {
+    assertAccessRole(accessRole);
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+        await lockMembershipTarget(client, userId, companyId);
+        const existing = await client.query(`SELECT 1 FROM company_users WHERE user_id = $1 AND company_id = $2 FOR UPDATE`, [userId, companyId]);
+        if (existing.rows[0]) throw new Error("User already has access to this company");
+        const result = await client.query(`INSERT INTO company_users (company_id, user_id, access_role) VALUES ($1, $2, $3) RETURNING company_id AS "companyId", user_id AS "userId", access_role AS "accessRole"`, [companyId, userId, accessRole]);
+        await writeAudit(client, { actorId, action: "COMPANY_ACCESS_GRANTED", targetType: "user", targetId: userId, changes: { companyId: String(companyId), accessRole } });
+        await client.query("COMMIT");
+        return result.rows[0];
+    } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+}
+
+export async function changeCompanyAccessRole({ actorId, userId, companyId, accessRole }) {
+    assertAccessRole(accessRole);
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+        await lockMembershipTarget(client, userId, companyId);
+        const membership = await client.query(`SELECT access_role FROM company_users WHERE user_id = $1 AND company_id = $2 FOR UPDATE`, [userId, companyId]);
+        if (!membership.rows[0]) throw new Error("Company access not found");
+        if (membership.rows[0].access_role === "OWNER" && accessRole === "CONSUMER") {
+            const owners = await client.query(`SELECT COUNT(*)::int AS count FROM company_users WHERE company_id = $1 AND access_role = 'OWNER'`, [companyId]);
+            if (owners.rows[0].count <= 1) throw new Error("This user is the last owner of this company. Assign another owner before changing access.");
+        }
+        const result = await client.query(`UPDATE company_users SET access_role = $3, updated_at = NOW() WHERE user_id = $1 AND company_id = $2 RETURNING company_id AS "companyId", user_id AS "userId", access_role AS "accessRole"`, [userId, companyId, accessRole]);
+        await writeAudit(client, { actorId, action: "COMPANY_ACCESS_ROLE_CHANGED", targetType: "user", targetId: userId, changes: { companyId: String(companyId), from: membership.rows[0].access_role, accessRole } });
+        await client.query("COMMIT");
+        return result.rows[0];
+    } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+}
+
+export async function removeCompanyAccess({ actorId, userId, companyId }) {
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+        assertUserId(userId); assertCompanyId(companyId);
+        const membership = await client.query(`SELECT access_role FROM company_users WHERE user_id = $1 AND company_id = $2 FOR UPDATE`, [userId, companyId]);
+        if (!membership.rows[0]) throw new Error("Company access not found");
+        await client.query(`SELECT id FROM companies WHERE id = $1 FOR UPDATE`, [companyId]);
+        if (membership.rows[0].access_role === "OWNER") {
+            const owners = await client.query(`SELECT COUNT(*)::int AS count FROM company_users WHERE company_id = $1 AND access_role = 'OWNER'`, [companyId]);
+            if (owners.rows[0].count <= 1) throw new Error("This user is the last owner of this company. Assign another owner before removing access.");
+        }
+        await client.query(`DELETE FROM company_users WHERE user_id = $1 AND company_id = $2`, [userId, companyId]);
+        await writeAudit(client, { actorId, action: "COMPANY_ACCESS_REMOVED", targetType: "user", targetId: userId, changes: { companyId: String(companyId), accessRole: membership.rows[0].access_role } });
+        await client.query("COMMIT");
+    } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
 }
 
 export async function changeRole({ actorId, userId, role }) {

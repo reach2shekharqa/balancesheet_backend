@@ -32,18 +32,22 @@ function setAuthCookie(res, user) {
 }
 
 router.post("/register", async (req, res) => {
-    const { userName, email, password } = req.body ?? {};
-    const validationError = validateRegistrationInput({ userName, email, password });
+    const { userName, email, password, companyName, cin, pan, registrationIntent = "owner" } = req.body ?? {};
+    const validationError = validateRegistrationInput({ userName, email, password, companyName, cin, pan, registrationIntent });
 
     if (validationError) {
         return res.status(400).json({ success: false, error: validationError });
     }
 
     try {
-        const user = await registerUser({ userName, email: normalizeEmail(email), password });
+        const user = await registerUser({ userName, email: normalizeEmail(email), password, companyName, cin, pan, registrationIntent });
         setAuthCookie(res, user);
-        return res.status(201).json({ success: true, user: toPublicUser(user) });
+        return res.status(201).json({ success: true, user: await toPublicUser(user) });
     } catch (error) {
+        if (error?.code === "COMPANY_DETAILS_CONFLICT") {
+            return res.status(409).json({ success: false, error: error.message });
+        }
+
         if (error?.code === "23505") {
             return res.status(409).json({ success: false, error: "An account with that email already exists." });
         }
@@ -72,7 +76,7 @@ router.post("/login", async (req, res) => {
 
         return res.json({
             success: true,
-            user: toPublicUser(user),
+            user: await toPublicUser(user),
             token
         });
     } catch (error) {
@@ -96,7 +100,7 @@ router.post("/google", async (req, res) => {
         setAuthCookie(res, user);
         return res.json({
             success: true,
-            user: toPublicUser(user),
+            user: await toPublicUser(user),
             token
         });
     } catch (error) {

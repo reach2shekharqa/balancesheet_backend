@@ -1,12 +1,11 @@
 import express from "express";
 
-import { pool } from "../db/db.js";
-
 import {
     extractFinancialAnalytics
 } from "../services/financialAnalyticsService.js";
 import { calculateKeyMetrics } from "../analytics/services/keyMetricsService.js";
 import { requireAuth } from "../middleware/authMiddleware.js";
+import { getAccessibleDocument, hasCompanyAccess } from "../services/companyAccessService.js";
 
 
 const router = express.Router();
@@ -42,6 +41,8 @@ router.post(
                 analyticsType
             } = req.body;
 
+            const companyId = req.body?.companyId ?? null;
+
             debugAnalyticsLog("documentId:", documentId);
             debugAnalyticsLog("analyticsType:", analyticsType);
 
@@ -72,33 +73,26 @@ router.post(
 
             }
 
+            if (companyId !== null && !(await hasCompanyAccess({ userId: req.user.userId, companyId }))) {
+                return res.status(403).json({
+                    success: false,
+                    error: "You are not authorized to access this company."
+                });
+            }
+
 
             /*
              * Get the already-parsed Markdown
              * directly from PostgreSQL.
              */
 
-            const result =
-                await pool.query(
-                    `
-                    SELECT
-                        d.id,
-                        d.extraction_status,
-                        d.extraction_payload
-                    FROM documents d
-                    INNER JOIN user_documents ud
-                        ON ud.document_id = d.id
-                       AND ud.user_id = $2
-                    WHERE d.id = $1
-                    `,
-                    [
-                        documentId,
-                        req.user.userId
-                    ]
-                );
+            const document = await getAccessibleDocument({
+                documentId,
+                userId: req.user.userId,
+                companyId
+            });
 
-
-            if (result.rows.length === 0) {
+            if (!document) {
 
                 return res.status(403).json({
 
@@ -110,10 +104,6 @@ router.post(
                 });
 
             }
-
-
-            const document =
-                result.rows[0];
 
 
             if (

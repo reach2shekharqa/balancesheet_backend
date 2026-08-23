@@ -15,7 +15,8 @@ import {
 
 export async function processPendingDocument({
     documentId,
-    filePath
+    filePath,
+    parsed: suppliedParsed = null
 }) {
 
     if (!documentId) {
@@ -72,10 +73,7 @@ export async function processPendingDocument({
 
         console.log("[LLAMAPARSE] extracting", { documentId });
 
-        const parsed =
-            await parsePdfWithLlamaParse(
-                filePath
-            );
+        const parsed = suppliedParsed ?? await parsePdfWithLlamaParse(filePath);
 
 
         if (!parsed) {

@@ -2,7 +2,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "test:auth": "node debug/testAuthentication.js"
+    "test:auth": "node debug/testAuthentication.js",
+    "test:company-onboarding": "node --test debug/companyOnboarding.test.js"
   },
   "dependencies": {
     "@llamaindex/cloud": "^4.1.3",

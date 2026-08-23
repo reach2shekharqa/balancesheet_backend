@@ -2,7 +2,7 @@ import express from "express";
 import { requireAuth } from "../middleware/authMiddleware.js";
 import { requireAdmin } from "../middleware/adminMiddleware.js";
 import { pool } from "../db/db.js";
-import { changeRole, deleteDocument, getDashboard, getUser, listDocuments, listUsers, parseNonNegativeInteger, softDeleteUser, updateUser } from "../services/adminService.js";
+import { addCompanyAccess, changeCompanyAccessRole, changeRole, createUser, deleteDocument, getDashboard, getUser, listCompanies, listDocuments, listUserCompanies, listUsers, parseNonNegativeInteger, removeCompanyAccess, softDeleteUser, updateUser } from "../services/adminService.js";
 
 const router = express.Router();
 router.use(requireAuth, requireAdmin);
@@ -14,7 +14,13 @@ const sendError = (res, error) => {
 
 router.get("/dashboard", async (req, res) => { try { return res.json(await getDashboard()); } catch (error) { return sendError(res, error); } });
 router.get("/users", async (req, res) => { try { return res.json({ users: await listUsers(req.query) }); } catch (error) { return sendError(res, error); } });
+router.post("/users", async (req, res) => { try { return res.status(201).json({ user: await createUser({ actorId: req.user.userId, userName: req.body?.userName, email: req.body?.email, password: req.body?.password }) }); } catch (error) { return sendError(res, error); } });
 router.get("/users/:userId", async (req, res) => { try { const user = await getUser(req.params.userId); return user ? res.json({ user }) : res.status(404).json({ error: "User not found" }); } catch (error) { return sendError(res, error); } });
+router.get("/users/:userId/companies", async (req, res) => { try { return res.json({ companies: await listUserCompanies(req.params.userId) }); } catch (error) { return sendError(res, error); } });
+router.post("/users/:userId/companies", async (req, res) => { try { return res.status(201).json({ membership: await addCompanyAccess({ actorId: req.user.userId, userId: req.params.userId, companyId: req.body?.companyId, accessRole: req.body?.accessRole }) }); } catch (error) { return sendError(res, error); } });
+router.patch("/users/:userId/companies/:companyId", async (req, res) => { try { return res.json({ membership: await changeCompanyAccessRole({ actorId: req.user.userId, userId: req.params.userId, companyId: req.params.companyId, accessRole: req.body?.accessRole }) }); } catch (error) { return sendError(res, error); } });
+router.delete("/users/:userId/companies/:companyId", async (req, res) => { try { await removeCompanyAccess({ actorId: req.user.userId, userId: req.params.userId, companyId: req.params.companyId }); return res.json({ success: true }); } catch (error) { return sendError(res, error); } });
+router.get("/companies", async (req, res) => { try { return res.json({ companies: await listCompanies() }); } catch (error) { return sendError(res, error); } });
 router.get("/users/:userId/documents", async (req, res) => { try { return res.json({ documents: (await getUser(req.params.userId))?.documents ?? [] }); } catch (error) { return sendError(res, error); } });
 router.patch("/users/:userId/role", async (req, res) => { try { return res.json({ user: await changeRole({ actorId: req.user.userId, userId: req.params.userId, role: req.body?.role }) }); } catch (error) { return sendError(res, error); } });
 router.patch("/users/:userId/status", async (req, res) => { try { if (typeof req.body?.isActive !== "boolean") throw new Error("Invalid active status"); return res.json({ user: await updateUser({ actorId: req.user.userId, userId: req.params.userId, field: "is_active", value: req.body.isActive, action: req.body.isActive ? "USER_ACTIVATED" : "USER_DEACTIVATED" }) }); } catch (error) { return sendError(res, error); } });

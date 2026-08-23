@@ -1,4 +1,5 @@
 import { pool } from "../db/db.js";
+import { getAccessibleDocuments } from "./companyAccessService.js";
 
 
 /* =========================================================
@@ -76,40 +77,39 @@ export async function linkDocumentToUser({
     };
 }
 
-export async function getUserDocuments({ userId }) {
+export async function getUserDocuments({ userId, companyId = null }) {
 
     const startedAt = Date.now();
 
     console.log("[USER DOCS DEBUG] query starting", {
-        userId
+        userId,
+        companyId
     });
 
     try {
 
-        const result = await pool.query(
-            `
-            SELECT
-                d.id,
-                d.original_filename,
-                d.file_size_mb,
-                d.extraction_status,
-                d.uploaded_at,
-                ud.created_at AS linked_at
-            FROM user_documents ud
-            INNER JOIN documents d
-                ON d.id = ud.document_id
-            WHERE ud.user_id = $1
-            ORDER BY ud.created_at DESC, d.id DESC
-            `,
-            [userId]
-        );
+        const documents = await getAccessibleDocuments({ userId, companyId });
+        const result = documents
+            .map(document => ({
+                id: document.id,
+                original_filename: document.original_filename,
+                file_size_mb: document.file_size_mb,
+                extraction_status: document.extraction_status,
+                uploaded_at: document.uploaded_at,
+                linked_at: document.linked_at
+            }))
+            .sort((left, right) => {
+                const leftDate = left.linked_at ?? left.uploaded_at ?? 0;
+                const rightDate = right.linked_at ?? right.uploaded_at ?? 0;
+                return new Date(rightDate) - new Date(leftDate) || right.id - left.id;
+            });
 
         console.log("[USER DOCS DEBUG] query completed", {
-            rows: result.rows.length,
+            rows: result.length,
             elapsedMs: Date.now() - startedAt
         });
 
-        return result.rows;
+        return result;
 
     } catch (error) {
 

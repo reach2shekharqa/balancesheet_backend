@@ -59,6 +59,7 @@ export async function findDocumentByHash(fileHash) {
             id,
             file_hash,
             original_filename,
+            company_id,
             extraction_status,
             extraction_payload,
             created_at

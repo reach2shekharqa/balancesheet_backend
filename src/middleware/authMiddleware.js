@@ -84,7 +84,7 @@ export async function requireAuth(req, res, next) {
             });
         }
 
-        req.user = toPublicUser(user);
+        req.user = await toPublicUser(user);
 
         console.log("[AUTH DEBUG] authentication successful", {
             userId: req.user.userId,
