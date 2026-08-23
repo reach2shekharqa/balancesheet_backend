@@ -1,3 +1,5 @@
+import { getSemanticTableText } from "./financialTableLabels.js";
+
 /**
  * Generic table selector.
  *
@@ -47,7 +49,7 @@ function getMetricCoverage(table, config) {
         return 0;
     }
 
-    const text = normalizeText(getTableText(table));
+    const text = normalizeText(getSemanticTableText(table));
     const metricConfigs = Object.values(metrics);
 
     if (metricConfigs.length === 0) {
@@ -62,28 +64,25 @@ function getMetricCoverage(table, config) {
     return matched / metricConfigs.length;
 }
 
-
 function getTableText(table) {
-
     const headerText = Array.isArray(table.headers)
         ? table.headers.map(cell => cell.text || "")
         : [];
 
     return headerText
         .concat(table.rows
-        .flat()
-        .map(cell => cell.text || "")
+            .flat()
+            .map(cell => cell.text || "")
         )
         .join(" ");
 }
-
 
 /**
  * Calculate table matching score.
  */
 export function scoreTable(table, config) {
 
-    const text = normalizeText(getTableText(table));
+    const text = normalizeText(getSemanticTableText(table));
 
     const requiredSignals = flattenSignals(
         config?.tableSelection?.requiredSignals ??

@@ -1,3 +1,5 @@
+import { getSemanticRowLabel } from "./financialTableLabels.js";
+
 function normalizeText(value) {
     return String(value ?? "")
         .toLowerCase()
@@ -52,11 +54,7 @@ function canonicalizeMatchText(value) {
 
 
 function getRowLabel(row) {
-    if (!row || !row.length) {
-        return "";
-    }
-
-    return normalizeText(row[0]?.text);
+    return normalizeText(getSemanticRowLabel(row));
 }
 
 
@@ -2361,7 +2359,9 @@ function findStructuralMetricRow(
                         sectionAggregateAliases
                     );
 
-                return structuralSubtotal;
+                if (role !== "statementtotal") {
+                    return structuralSubtotal;
+                }
 
             }
 
@@ -3190,8 +3190,7 @@ function findMetricRows(
                 matches[metricName] = {
                     metricName,
                     rowLabel:
-                        aggregateRow[0]?.text ??
-                        "",
+                        getSemanticRowLabel(aggregateRow),
                     row:
                         aggregateRow
                 };
@@ -3413,8 +3412,7 @@ function findMetricRows(
             matches[metricName] = {
                 metricName,
                 rowLabel:
-                    matchedRow[0]?.text ??
-                    "",
+                    getSemanticRowLabel(matchedRow),
                 row:
                     matchedRow
             };
