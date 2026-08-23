@@ -111,7 +111,7 @@ const uploadWithDebug = (req, res, next) => {
 };
 
 async function requireCompanyUploadOwner(req, res, next) {
-    const companyId = req.body?.companyId;
+    const companyId = req.body?.companyId || null;
     try {
         req.uploadAuthorization = await authorizeDocumentUpload({
             userId: req.user.userId,
@@ -341,7 +341,7 @@ router.post(
         }
 
         console.log("[UPLOAD_BATCH] received", { count: req.files.length });
-        const companyId = req.body?.companyId;
+        const companyId = req.body?.companyId || null;
 
         let prepared;
         try {
