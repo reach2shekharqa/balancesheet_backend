@@ -1,11 +1,23 @@
 import { getSemanticRowLabel } from "./financialTableLabels.js";
 
-function normalizeText(value) {
+function normalizeFinancialLabel(value) {
     return String(value ?? "")
-        .toLowerCase()
-        .replace(/&amp;/g, "&")
+        .replace(/\*\*/g, "")
+        .replace(/__/g, "")
+        .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+        .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+        .replace(/[\u2010-\u2015\u2212]/g, "-")
+        .replace(/[\u00A0\u2000-\u200B]/g, " ")
+        .replace(/&amp;/gi, "&")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+}
+
+function normalizeText(value) {
+    return normalizeFinancialLabel(value)
         .replace(/&/g, " and ")
-        .replace(/[()]/g, " ")
+        .replace(/[\\/|]+/g, " ")
         .replace(/[^a-z0-9]+/g, " ")
         .replace(/\s+/g, " ")
         .trim();
@@ -3428,12 +3440,128 @@ function findMetricRows(
    EXPORTS
    ========================================================= */
 
+function canonicalRowRole(role) {
+    const normalized = String(role ?? "").trim().toLowerCase();
+    const canonicalRoles = {
+        header: "header",
+        detail: "detail",
+        subtotal: "subtotal",
+        sectiontotal: "sectionTotal",
+        aggregate: "aggregate",
+        result: "result",
+        tax: "tax",
+        statementtotal: "statementTotal",
+        unknown: "unknown"
+    };
+
+    if (canonicalRoles[normalized]) {
+        return canonicalRoles[normalized];
+    }
+
+    if (normalized.includes("tax")) return "tax";
+    if (["profit", "persharemetric", "cashbalance"].includes(normalized)) return "result";
+    if (["income", "expense", "operatingmetric", "operatingadjustment", "workingcapitaladjustment", "operatingcashitem", "investingcashitem", "financingcashitem", "cashcomponent"].includes(normalized)) return "detail";
+
+    return "unknown";
+}
+
+function getContextValues(row) {
+    if (row?.values && typeof row.values === "object") {
+        return Object.values(row.values).map(Number).filter(Number.isFinite);
+    }
+
+    if (Array.isArray(row)) {
+        return row.slice(1).map(getNumericCellValue).filter(value => value !== null);
+    }
+
+    return [];
+}
+
+function valuesReconcileToSum(candidate, rows) {
+    const candidateValues = getContextValues(candidate);
+    const sourceValues = rows.map(getContextValues);
+
+    if (candidateValues.length === 0 || sourceValues.some(values => values.length !== candidateValues.length)) {
+        return false;
+    }
+
+    return candidateValues.every((value, valueIndex) =>
+        reconcilesWithinNumericTolerance(
+            value,
+            sourceValues.reduce((sum, values) => sum + values[valueIndex], 0)
+        )
+    );
+}
+
+function resolveRowRole(row, context = {}) {
+    const label = normalizeFinancialLabel(row?.label ?? getSemanticRowLabel(row));
+    const normalizedLabel = canonicalizeMatchText(label);
+    const metricConfigs = context.metricConfigs ?? {};
+    const metricNames = context.metricNames ?? [];
+    const configuredRoles = metricNames
+        .map(metricName => canonicalRowRole(metricConfigs[metricName]?.role ?? context.metricRole))
+        .filter(role => role !== "unknown");
+    const hasValues = getContextValues(row).length > 0;
+
+    const structuralRole = configuredRoles.find(role =>
+        ["statementTotal", "sectionTotal", "subtotal", "aggregate", "result", "tax"].includes(role)
+    );
+    if (structuralRole) {
+        return { role: structuralRole, confidence: 0.99, reason: "validated configured structural role" };
+    }
+
+    const rows = Array.isArray(context.section?.rows)
+        ? context.section.rows
+        : Array.isArray(context.rows) ? context.rows : [];
+    const rowIndex = Number.isInteger(context.rowIndex) ? context.rowIndex : rows.indexOf(row);
+    const previousRows = rows
+        .filter(candidate => (candidate.rowIndex ?? rows.indexOf(candidate)) < rowIndex)
+        .filter(candidate => getContextValues(candidate).length > 0);
+    const previousStructural = previousRows.filter(candidate =>
+        ["sectionTotal", "subtotal", "aggregate", "statementTotal"].includes(candidate.role)
+    );
+
+    if (!label && hasValues && valuesReconcileToSum(row, previousRows.slice(-10).filter(candidate => {
+        const candidateLabel = canonicalizeMatchText(candidate.label);
+        return candidateLabel && !/\b(?:total|subtotal|profit|loss|tax|cash flow|closing|opening)\b/.test(candidateLabel);
+    }))) {
+        return { role: "sectionTotal", confidence: 0.92, reason: "preceding detail rows reconcile to parent total" };
+    }
+
+    if (normalizedLabel && /\b(?:profit|loss|exceptional|extraordinary|earnings per share|net income|net cash flow|opening cash|closing cash)\b/.test(normalizedLabel)) {
+        return { role: "result", confidence: 0.9, reason: "statement result semantic classification" };
+    }
+
+    if (normalizedLabel && /\b(?:tax|deferred tax|current tax)\b/.test(normalizedLabel)) {
+        return { role: "tax", confidence: 0.9, reason: "tax semantic classification" };
+    }
+
+    if (normalizedLabel && /\b(?:total|subtotal|aggregate|gross profit|operating profit|cash generated from|cash used in|cash and cash equivalents)\b/.test(normalizedLabel)) {
+        const sectionQualifier = /\b(?:current|non current|noncurrent)\b/.test(normalizedLabel);
+        const statementLike = !sectionQualifier && /\b(?:assets|liabilities|equity|income|expenses|expense|period|year|net cash|closing cash)\b/.test(normalizedLabel);
+        return { role: statementLike ? "statementTotal" : "sectionTotal", confidence: 0.88, reason: "generic structural total semantics" };
+    }
+
+    if (!label && hasValues && previousStructural.length > 0) {
+        return { role: "sectionTotal", confidence: 0.78, reason: "unlabelled numeric row follows structural parent" };
+    }
+
+    if (label && hasValues) {
+        return { role: "detail", confidence: 0.8, reason: "labelled numeric source row" };
+    }
+
+    return { role: "unknown", confidence: 0.1, reason: "insufficient semantic or structural evidence" };
+}
+
 export {
     findMetricRows,
     findConfiguredSections,
     getRequiredSectionSignals,
     normalizeText,
     canonicalizeMatchText,
+    normalizeFinancialLabel,
+    canonicalRowRole,
+    resolveRowRole,
     getRowLabel,
     hasNumericValue,
     matchesAnyAlias

@@ -4,7 +4,9 @@ import { extractHtmlTables } from "../parser/htmlTableParser.js";
 import { parseMarkdownTables } from "../parser/markdownTableParser.js";
 import { selectTables } from "../analytics/core/tableSelector.js";
 import {
-    findConfiguredSections
+    findConfiguredSections,
+    resolveRowRole,
+    normalizeFinancialLabel
 } from "../analytics/core/metricRowMatcher.js";
 
 const DEBUG_ANALYTICS_LOGGING =
@@ -1276,10 +1278,39 @@ function buildAnalyticsDataset(
         );
     }
 
-    return sections.flatMap(section =>
-        section.rows.map(row => {
+    return sections.flatMap(section => {
+        const resolvedRows = [];
+
+        return section.rows.map(row => {
             const metric =
                 metricsByRowIndex.get(row.rowIndex);
+
+            const resolution = resolveRowRole(row, {
+                rowIndex: row.rowIndex,
+                section: { ...section, rows: resolvedRows },
+                metricNames: metric?.metricNames ?? [],
+                metricConfigs: metricsConfig
+            });
+
+            const resolvedRow = {
+                ...row,
+                role: resolution.role
+            };
+            resolvedRows.push(resolvedRow);
+
+            debugAnalyticsLog(
+                "ROW ROLE RESOLUTION",
+                JSON.stringify({
+                    rowIndex: row.rowIndex,
+                    label: row.label,
+                    normalizedLabel: normalizeFinancialLabel(row.label),
+                    section: section.section,
+                    role: resolution.role,
+                    confidence: resolution.confidence,
+                    resolutionReason: resolution.reason,
+                    metricNames: metric?.metricNames ?? []
+                })
+            );
 
             const percentages = section.sourceTotal
                 ? Object.fromEntries(
@@ -1309,11 +1340,13 @@ function buildAnalyticsDataset(
                 inclusionReason: metric
                     ? "matched configured metric within validated source section"
                     : "source row within validated section",
-                role: metric?.role ?? "detail",
-                metricNames: metric?.metricNames ?? []
+                role: resolution.role,
+                metricNames: metric?.metricNames ?? [],
+                confidence: resolution.confidence,
+                resolutionReason: resolution.reason
             };
-        })
-    );
+        });
+    });
 }
 export async function extractFinancialAnalyticsFromFile({
     markdownPath,
