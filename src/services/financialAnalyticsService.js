@@ -1173,9 +1173,10 @@ export async function extractFinancialAnalytics({
    FILE-BASED HELPER
    ========================================================= */
 function discoverSectionRows(table, analyticsConfig, years) {
-    const sections = findConfiguredSections(
+    const sections = splitNestedConfiguredSections(
         table,
-        analyticsConfig
+        analyticsConfig,
+        findConfiguredSections(table, analyticsConfig)
     );
 
     const discoveredSections = [];
@@ -1245,6 +1246,42 @@ function discoverSectionRows(table, analyticsConfig, years) {
     }
 
     return discoveredSections;
+}
+
+function splitNestedConfiguredSections(table, analyticsConfig, sections) {
+    const aliases = (analyticsConfig?.tableSelection?.requiredSignals ?? []).flat();
+
+    return sections.flatMap(section => {
+        const boundaries = [section.startIndex];
+        let sectionEnd = section.endIndex;
+
+        for (let rowIndex = section.startIndex + 1; rowIndex < section.endIndex; rowIndex += 1) {
+            const row = table.rows[rowIndex];
+            const rawLabel = String(row?.[0]?.text ?? "").replace(/\*/g, "").trim();
+            const normalizedLabel = rawLabel
+                .replace(/^(?:[ivxlcdm]+|\d+)[\s.)-]+/i, "")
+                .replace(/[\s:.-]+$/, "")
+                .trim()
+                .toLowerCase();
+            const hasFinancialValues = row?.slice(2).some(cell => /[-+]?\d[\d,]*(?:\.\d+)?/.test(String(cell?.text ?? "")));
+
+            if (normalizedLabel.startsWith("total ") && normalizedLabel.includes("expense")) {
+                sectionEnd = rowIndex + 1;
+                break;
+            }
+
+            if (!hasFinancialValues && aliases.some(alias => normalizedLabel === String(alias).toLowerCase())) {
+                boundaries.push(rowIndex);
+            }
+        }
+
+        return boundaries.map((startIndex, index) => ({
+            ...section,
+            sectionId: `section-${startIndex}`,
+            startIndex,
+            endIndex: boundaries[index + 1] ?? sectionEnd
+        }));
+    });
 }
 
 
