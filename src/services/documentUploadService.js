@@ -280,7 +280,8 @@ async function processDocumentUploadPipeline({
     companyId = null,
     authorization,
     prepared = null,
-    onQuotaReserved
+    onQuotaReserved,
+    onQuotaReleased = () => {}
 }) {
 
     console.log(
@@ -421,9 +422,6 @@ async function processDocumentUploadPipeline({
 
         assertCompanyCin(cache.document, authorization);
 
-        await reserveQuotaOrThrow(userId);
-        onQuotaReserved();
-
         return await retryFailedDocument({
             userId,
             fileInfo,
@@ -476,6 +474,8 @@ async function processDocumentUploadPipeline({
     }
 
     if (!created.created) {
+        await releaseUploadQuota(userId);
+        onQuotaReleased();
         assertCachedDocumentAuthorized(document, authorization);
         if (["completed", "failed"].includes(document.extraction_status)) {
             assertCompanyCin(document, authorization);
@@ -667,6 +667,9 @@ export async function processDocumentUpload({ file, userId, companyId = null, au
             prepared,
             onQuotaReserved: () => {
                 quotaReserved = true;
+            },
+            onQuotaReleased: () => {
+                quotaReserved = false;
             }
         });
         if (quotaReserved && ["FAILED", "REUSE", "WAIT"].includes(result?.action)) {

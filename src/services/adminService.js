@@ -44,7 +44,7 @@ export async function getDashboard() {
             COUNT(*) FILTER (WHERE is_deleted = TRUE)::int AS deleted_users,
             COUNT(*) FILTER (WHERE role = 'admin' AND is_deleted = FALSE)::int AS admin_count,
             COALESCE(SUM(uploads_used), 0)::int AS total_uploads,
-            COALESCE(SUM(storage_used_mb), 0)::int AS total_storage_used_mb,
+            COALESCE((SELECT SUM(file_size_mb) FROM documents), 0)::float8 AS total_storage_used_mb,
             (SELECT COUNT(*)::int FROM documents) AS total_documents
         FROM users`);
     const activity = await pool.query(`
@@ -70,7 +70,7 @@ export async function listUsers({ search = "", filter = "all" } = {}) {
         SELECT u.user_id AS "userId", u.user_name AS "userName", u.email, u.role, u.uploads_used AS "uploadsUsed",
                u.upload_count AS "uploadCount", u.upload_limit_mb AS "uploadLimitMb",
                COALESCE(p.upload_quota, u.upload_quota, 1)::int AS "uploadQuota",
-               u.upload_quota AS "configuredUploadQuota", u.storage_used_mb AS "storageUsedMb", u.storage_limit_mb AS "storageLimitMb",
+               u.upload_quota AS "configuredUploadQuota", COALESCE((SELECT SUM(d.file_size_mb) FROM documents d WHERE d.user_id = u.user_id), 0)::float8 AS "storageUsedMb", u.storage_limit_mb AS "storageLimitMb",
                u.is_active AS "isActive", u.is_deleted AS "isDeleted", u.created_at AS "createdAt",
                CASE WHEN u.is_deleted OR NOT u.is_active THEN '[]'::json ELSE COALESCE((SELECT json_agg(json_build_object('companyId', c.id, 'companyName', c.company_name, 'accessRole', cu.access_role) ORDER BY c.company_name) FROM company_users cu JOIN companies c ON c.id = cu.company_id WHERE cu.user_id = u.user_id AND c.is_active = TRUE), '[]'::json) END AS companies
                 FROM users u
@@ -92,7 +92,7 @@ export async function getUser(userId) {
              u.created_at AS "createdAt", u.updated_at AS "updatedAt", u.uploads_used AS "uploadsUsed",
              u.upload_count AS "uploadCount", u.upload_limit_mb AS "uploadLimitMb",
              COALESCE(p.upload_quota, u.upload_quota, 1)::int AS "uploadQuota",
-             u.upload_quota AS "configuredUploadQuota", u.storage_used_mb AS "storageUsedMb", u.storage_limit_mb AS "storageLimitMb", NULL AS "lastSignInAt",
+             u.upload_quota AS "configuredUploadQuota", COALESCE((SELECT SUM(d.file_size_mb) FROM documents d WHERE d.user_id = u.user_id), 0)::float8 AS "storageUsedMb", u.storage_limit_mb AS "storageLimitMb", NULL AS "lastSignInAt",
                deleted_at AS "deletedAt", deleted_by AS "deletedBy", deletion_reason AS "deletionReason"
          FROM users u
          LEFT JOIN LATERAL (
@@ -112,6 +112,47 @@ export async function getUser(userId) {
 export async function listCompanies() {
     const result = await pool.query(`SELECT id AS "companyId", company_name AS "companyName", cin FROM companies WHERE is_active = TRUE ORDER BY company_name`);
     return result.rows;
+}
+
+export async function listAdminCompanies() {
+    const result = await pool.query(`
+        SELECT c.id AS "companyId", c.company_name AS "companyName", c.cin, c.pan,
+               COUNT(DISTINCT cu.user_id)::int AS "userCount",
+               COUNT(DISTINCT d.id)::int AS "documentCount"
+        FROM companies c
+        LEFT JOIN company_users cu ON cu.company_id = c.id
+        LEFT JOIN documents d ON d.company_id = c.id
+        WHERE c.is_active = TRUE
+        GROUP BY c.id
+        ORDER BY c.company_name`);
+    return result.rows;
+}
+
+export async function deleteCompanies({ actorId, companyIds }) {
+    if (!Array.isArray(companyIds) || companyIds.length === 0 || companyIds.length > 500) throw new Error("Invalid company list");
+    const uniqueCompanyIds = [...new Set(companyIds)];
+    uniqueCompanyIds.forEach(assertCompanyId);
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+        const companies = await client.query(`SELECT id, company_name, cin FROM companies WHERE id = ANY($1::bigint[]) AND is_active = TRUE ORDER BY id FOR UPDATE`, [uniqueCompanyIds]);
+        if (companies.rows.length !== uniqueCompanyIds.length) throw new Error("One or more companies were not found");
+        for (const company of companies.rows) {
+            const documents = await client.query(`SELECT COUNT(*)::int AS count FROM documents WHERE company_id = $1`, [company.id]);
+            const memberships = await client.query(`SELECT COUNT(*)::int AS count FROM company_users WHERE company_id = $1`, [company.id]);
+            await client.query(`UPDATE documents SET company_id = NULL WHERE company_id = $1`, [company.id]);
+            await client.query(`DELETE FROM company_users WHERE company_id = $1`, [company.id]);
+            await client.query(`DELETE FROM companies WHERE id = $1`, [company.id]);
+            await writeAudit(client, { actorId, action: "COMPANY_DELETED", targetType: "company", targetId: company.id, changes: { companyName: company.company_name, cin: company.cin, documentsDetached: documents.rows[0].count, membershipsRemoved: memberships.rows[0].count } });
+        }
+        await client.query("COMMIT");
+        return { companies: uniqueCompanyIds, count: uniqueCompanyIds.length };
+    } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+    } finally {
+        client.release();
+    }
 }
 
 export async function listUserCompanies(userId) {
@@ -326,6 +367,87 @@ export async function clearUserData({ actorId, userId }) {
         await client.query("COMMIT");
         return summary;
     } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+}
+
+export async function permanentlyDeleteUser({ actorId, userId }) {
+    assertUserId(userId);
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+        const user = await client.query(`SELECT user_id, role FROM users WHERE user_id = $1 FOR UPDATE`, [userId]);
+        if (!user.rows[0]) throw new Error("User not found");
+        if (userId === actorId) throw new Error("You cannot permanently delete your own account");
+        if (user.rows[0].role === "admin") {
+            const admins = await client.query(`SELECT COUNT(*)::int AS count FROM users WHERE role = 'admin' AND is_deleted = FALSE`);
+            if (admins.rows[0].count <= 1) throw new Error("Cannot delete the last administrator");
+        }
+        const documents = await client.query(`SELECT id FROM documents WHERE user_id = $1 FOR UPDATE`, [userId]);
+        for (const document of documents.rows) await deleteDocumentWithClient(client, document.id);
+        await client.query(`DELETE FROM user_documents WHERE user_id = $1`, [userId]);
+        await client.query(`DELETE FROM user_storage_logs WHERE user_id = $1`, [userId]);
+        await client.query(`DELETE FROM user_subscriptions WHERE user_id = $1`, [userId]);
+        await client.query(`DELETE FROM company_users WHERE user_id = $1`, [userId]);
+        await writeAudit(client, { actorId, action: "USER_PERMANENTLY_DELETED", targetType: "user", targetId: userId, changes: { role: user.rows[0].role } });
+        await client.query(`DELETE FROM users WHERE user_id = $1`, [userId]);
+        await client.query("COMMIT");
+        return { userId };
+    } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+export async function permanentlyDeleteUsers({ actorId, userIds }) {
+    if (!Array.isArray(userIds) || userIds.length === 0 || userIds.length > 500) throw new Error("Invalid user list");
+    const uniqueUserIds = [...new Set(userIds)];
+    uniqueUserIds.forEach(assertUserId);
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+        const users = await client.query(`SELECT user_id, role FROM users WHERE user_id = ANY($1::text[]) ORDER BY user_id FOR UPDATE`, [uniqueUserIds]);
+        if (users.rows.length !== uniqueUserIds.length) throw new Error("One or more users were not found");
+        if (uniqueUserIds.includes(actorId)) throw new Error("You cannot permanently delete your own account");
+        const selectedAdmins = users.rows.filter(user => user.role === "admin").length;
+        if (selectedAdmins) {
+            const admins = await client.query(`SELECT COUNT(*)::int AS count FROM users WHERE role = 'admin' AND is_deleted = FALSE`);
+            if (admins.rows[0].count <= selectedAdmins) throw new Error("Cannot delete the last administrator");
+        }
+        for (const user of users.rows) {
+            const documents = await client.query(`SELECT id FROM documents WHERE user_id = $1 FOR UPDATE`, [user.user_id]);
+            for (const document of documents.rows) await deleteDocumentWithClient(client, document.id);
+            await client.query(`DELETE FROM user_documents WHERE user_id = $1`, [user.user_id]);
+            await client.query(`DELETE FROM user_storage_logs WHERE user_id = $1`, [user.user_id]);
+            await client.query(`DELETE FROM user_subscriptions WHERE user_id = $1`, [user.user_id]);
+            await client.query(`DELETE FROM company_users WHERE user_id = $1`, [user.user_id]);
+            await writeAudit(client, { actorId, action: "USER_PERMANENTLY_DELETED", targetType: "user", targetId: user.user_id, changes: { role: user.role } });
+            await client.query(`DELETE FROM users WHERE user_id = $1`, [user.user_id]);
+        }
+        await client.query("COMMIT");
+        return { users: uniqueUserIds, count: uniqueUserIds.length };
+    } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+export async function clearAuditLogs({ actorId }) {
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+        const deleted = await client.query(`DELETE FROM audit_logs`);
+        await writeAudit(client, { actorId, action: "CLEAR_AUDIT_LOGS", targetType: "audit_log", changes: { deleted: deleted.rowCount } });
+        await client.query("COMMIT");
+        return { deleted: deleted.rowCount };
+    } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+    } finally {
+        client.release();
+    }
 }
 
 async function deleteDocumentWithClient(client, documentId) {
