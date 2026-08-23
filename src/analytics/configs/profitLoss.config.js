@@ -138,7 +138,9 @@ export const profitLossConfig = {
                 "profit beforetax (pbt)",
                 "profit loss before tax",
                 "profit loss beforetax",
-                "profit beforetax"
+                "profit beforetax",
+                "Profit/(Loss) before Kxceptianal-and Extraordinary Jems and Tax (I 1V)",
+                "Profit/(Loss) before Extraordinary Ttems and Tax (V-V1)"
             ]
         },
 

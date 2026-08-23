@@ -45,6 +45,7 @@ function canonicalizeMatchText(value) {
             .replace(/equivaients/g, "equivalents")
             .replace(/equivallents/g, "equivalents")
             .replace(/borrowimgs/g, "borrowings")
+            .replace(/^tem$/g, "term")
             .replace(/deffered/g, "deferred")
             .replace(/equivalant/g, "equivalent")
         )
