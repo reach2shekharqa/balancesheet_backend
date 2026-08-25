@@ -57,6 +57,16 @@ export const liabilitiesBreakdownConfig = {
             ]
         },
 
+        reservesAndSurplus: {
+            role: "detail",
+            concept: "equity",
+            aliases: [
+                "reserves and surplus",
+                "reserves & surplus",
+                "retained earnings"
+            ]
+        },
+
         totalBorrowings: {
             role: "aggregate",
             concept: "interestBearingDebt",
