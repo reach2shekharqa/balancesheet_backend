@@ -87,7 +87,15 @@ export async function findDocumentByHash(fileHash, ownership) {
 export async function findReadyDocumentByHash(fileHash) {
     const result = await pool.query(
         `
-        SELECT extraction_payload
+        SELECT
+            id,
+            file_hash,
+            user_id,
+            original_filename,
+            company_id,
+            extraction_status,
+            extraction_payload,
+            created_at
         FROM documents
         WHERE file_hash = $1
           AND extraction_status = 'completed'

@@ -45,7 +45,7 @@ export function canAccessDocument(document) {
     }
 
     if (document.company_id !== null && document.company_id !== undefined) {
-        return document.has_company_access === true;
+        return document.has_company_access === true || document.has_legacy_access === true;
     }
 
     return document.has_legacy_access === true;

@@ -70,6 +70,16 @@ export async function checkUploadedDocument(filePath, authorization) {
 
     }
 
+    const globalReadyDocument = await findReadyDocumentByHash(fileHash);
+    if (globalReadyDocument) {
+        return {
+            action: "REUSE",
+            fileHash,
+            document: globalReadyDocument,
+            contentSource: true
+        };
+    }
+
     return {
         action: "PARSE",
         fileHash,
@@ -169,6 +179,7 @@ export async function createPendingDocument({
         document: existing.rows[0] ?? null
     };
 }
+
 /* =========================================================
    PROCESS UPLOAD
    ========================================================= */
@@ -328,7 +339,9 @@ async function processDocumentUploadPipeline({
         userId
     });
 
-    assertCachedDocumentAuthorized(cache.document, authorization);
+    if (!cache.contentSource) {
+        assertCachedDocumentAuthorized(cache.document, authorization);
+    }
 
     console.log(cache.action === "REUSE" ? "[CACHE] hit" : `[CACHE] ${cache.action.toLowerCase()}`, {
         filename: fileInfo.originalFilename,
@@ -369,6 +382,27 @@ async function processDocumentUploadPipeline({
     }
 
     if (cache.action === "REUSE") {
+
+        if (cache.contentSource) {
+            assertCompanyCin(cache.document, authorization);
+            assertIndependentCin(cache.document);
+
+            removeUploadedFile(fileInfo.filePath);
+            await linkDocumentToUser({ userId, documentId: cache.document.id });
+
+            console.log("[LLAMAPARSE] skipped", {
+                reason: "global-content-cache-hit",
+                fileHash: cache.fileHash,
+                sourceDocumentId: cache.document.id,
+                documentId: cache.document.id
+            });
+
+            return {
+                action: "REUSE",
+                fileHash: cache.fileHash,
+                document: cache.document
+            };
+        }
 
         assertCompanyCin(cache.document, authorization);
 
@@ -729,7 +763,9 @@ export async function prepareCompanyUploadBatch({ files, userId, authorization }
                 ...authorization,
                 userId
             });
-            assertCachedDocumentAuthorized(cache.document, authorization);
+            if (!cache.contentSource) {
+                assertCachedDocumentAuthorized(cache.document, authorization);
+            }
             let parsed = null;
             if (cache.action === "REUSE" || cache.action === "RETRY") {
                 assertCompanyCin(cache.document, authorization);
