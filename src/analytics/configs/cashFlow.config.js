@@ -59,7 +59,8 @@ export const cashFlowConfig = {
                 "finance costs",
                 "finance cost",
                 "financial costs",
-                "financial cost"
+                "financial cost",
+                "financial expenses"
             ]
         },
 

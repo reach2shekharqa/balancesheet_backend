@@ -93,7 +93,8 @@ export const profitLossConfig = {
                 "finance costs",
                 "finance cost",
                 "financial costs",
-                "financial cost"
+                "financial cost",
+                "financial expenses"
             ]
         },
 

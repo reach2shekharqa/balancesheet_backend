@@ -6,7 +6,7 @@ function getClassificationText(value) {
     return value
         .replace(/\*\*/g, "")
         .replace(/__/g, "")
-        .replace(/^(?:\d+|[a-z])\.\s*/i, "")
+    .replace(/^\s*(?:\(?\d+\)?|\(?[ivxlcdm]+\)?|\(?[a-z]\)?)\s*[.)]?\s+/i, "")
         .replace(/:\s*$/, "")
         .trim();
 }

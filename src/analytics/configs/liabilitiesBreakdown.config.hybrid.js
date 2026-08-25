@@ -17,6 +17,7 @@ export const liabilitiesBreakdownConfig = {
     metrics: {
         totalNonCurrentLiabilities: {
             role: "sectionTotal",
+            concept: "nonCurrentLiabilities",
             aliases: [
                 "total non-current liabilities",
                 "total non current liabilities",
@@ -26,6 +27,7 @@ export const liabilitiesBreakdownConfig = {
 
         totalCurrentLiabilities: {
             role: "sectionTotal",
+            concept: "currentLiabilities",
             aliases: [
                 "total current liabilities"
             ]
@@ -33,6 +35,7 @@ export const liabilitiesBreakdownConfig = {
 
         totalLiabilities: {
             role: "statementTotal",
+            concept: "liabilities",
             aliases: [
                 "total liabilities"
             ]
@@ -40,6 +43,15 @@ export const liabilitiesBreakdownConfig = {
 
         totalEquity: {
             role: "statementTotal",
+            concept: "equity",
+            structural: {
+                sectionAliases: [
+                    "equity",
+                    "shareholders funds",
+                    "shareholders equity",
+                    "owners equity"
+                ]
+            },
             aliases: [
                 "total equity"
             ]
@@ -47,6 +59,15 @@ export const liabilitiesBreakdownConfig = {
 
         totalBorrowings: {
             role: "aggregate",
+            concept: "interestBearingDebt",
+            structural: {
+                sectionAliases: [
+                    "liabilities",
+                    "non-current liabilities",
+                    "non current liabilities",
+                    "current liabilities"
+                ]
+            },
             aliases: [
                 "total borrowings",
                 "total debt",

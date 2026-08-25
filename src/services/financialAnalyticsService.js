@@ -984,7 +984,8 @@ export async function extractFinancialAnalytics({
                         resolution.confidence ??
                         (String(match.row?.[0]?.text ?? "").trim()
                             ? 0.82
-                            : 0.6)
+                            : 0.6),
+                    components: resolution.components ?? null
                 },
 
                 resolution: {
@@ -1008,7 +1009,8 @@ export async function extractFinancialAnalytics({
                     reconciliation:
                         resolution.reconciliation ??
                         match.reconciliation ??
-                        null
+                        null,
+                    components: resolution.components ?? null
                 },
                 reconciliation:
                     match.row?.__analyticsResolution?.reconciliation ??

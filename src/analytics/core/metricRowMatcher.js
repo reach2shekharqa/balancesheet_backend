@@ -2,6 +2,7 @@ import { getSemanticRowLabel } from "./financialTableLabels.js";
 
 function normalizeFinancialLabel(value) {
     return String(value ?? "")
+        .replace(/^\s*(?:\(?\d+\)?|\(?[ivxlcdm]+\)?|\(?[a-z]\)?)\s*[.)]?\s+/i, "")
         .replace(/\*\*/g, "")
         .replace(/__/g, "")
         .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
@@ -648,6 +649,7 @@ function reconcilesWithinNumericTolerance(
     return (
         Math.abs(left - right) <=
         NUMERIC_RECONCILIATION_TOLERANCE +
+        1e-9 +
         Number.EPSILON * Math.max(1, Math.abs(left), Math.abs(right))
     );
 }
@@ -664,6 +666,214 @@ function hasValidYearValues(table, row) {
         columnIndex =>
             getNumericCellValue(row?.[columnIndex]) !== null
     );
+}
+
+
+function isStructuralPatLabel(label) {
+    const normalized = canonicalizeMatchText(label);
+
+    if (!normalized || !/\b(?:profit|loss|income|earnings)\b/.test(normalized)) {
+        return false;
+    }
+
+    return !/\b(?:before tax|pbt|operating profit|gross profit|from operations|exceptional|extraordinary|per share|eps)\b/.test(normalized);
+}
+
+
+function isStructuralPbtLabel(label) {
+    const normalized = canonicalizeMatchText(label);
+
+    return /\b(?:profit|loss)\b.*\bbefore tax\b/.test(normalized);
+}
+
+
+function isStructuralTaxAggregateLabel(label) {
+    const normalized = canonicalizeMatchText(label);
+
+    if (
+        !normalized ||
+        /\b(?:current|deferred) tax\b/.test(normalized)
+    ) {
+        return false;
+    }
+
+    return /\b(?:total\s+(?:income\s+)?tax(?:\s+expenses?)?|(?:income\s+)?tax\s+expenses?|taxation)\b/.test(normalized);
+}
+
+
+function findStructuralPatRow(table, metricsConfig, analyticsConfig = {}) {
+    if (!Array.isArray(table?.rows)) {
+        return null;
+    }
+
+    const structuralLabel = row =>
+        getRowLabel(row) || normalizeText(row?.[0]?.text);
+
+    const pbtConfig = metricsConfig?.profitBeforeTax;
+    const pbtAliases = getConfiguredAliases(pbtConfig);
+    const taxConfigs = Object.entries(metricsConfig ?? {})
+        .filter(([metricName, config]) =>
+            metricName !== "profitAfterTax" && getMetricRole(config) === "tax"
+        )
+        .map(([, config]) => getConfiguredAliases(config))
+        .flat();
+    const searchRanges = [{
+        startIndex: 0,
+        endIndex: table.rows.length
+    }];
+    const candidates = [];
+
+    for (const range of searchRanges) {
+        const pbtRows = [];
+
+        for (let index = range.startIndex; index < range.endIndex; index++) {
+            const row = table.rows[index];
+
+            if (
+                hasValidYearValues(table, row) &&
+                (
+                    matchesAnyAlias(structuralLabel(row), pbtAliases) ||
+                    isStructuralPbtLabel(structuralLabel(row))
+                )
+            ) {
+                pbtRows.push({ row, rowIndex: index });
+            }
+        }
+
+        for (let index = range.startIndex; index < range.endIndex; index++) {
+            const row = table.rows[index];
+            const label = structuralLabel(row);
+
+            if (
+                !hasValidYearValues(table, row) ||
+                !isStructuralPatLabel(label)
+            ) {
+                continue;
+            }
+
+            const pbt = [...pbtRows]
+                .reverse()
+                .find(candidate => candidate.rowIndex < index);
+
+            if (!pbt) {
+                continue;
+            }
+
+            const taxComponents = [];
+            const taxAggregates = [];
+            for (let taxIndex = pbt.rowIndex + 1; taxIndex < index; taxIndex++) {
+                const taxRow = table.rows[taxIndex];
+                const taxLabel = structuralLabel(taxRow);
+
+                if (
+                    hasValidYearValues(table, taxRow) &&
+                    (
+                        matchesAnyAlias(taxLabel, taxConfigs) ||
+                        isStructuralTaxAggregateLabel(taxLabel)
+                    )
+                ) {
+                    const taxMatch = { row: taxRow, rowIndex: taxIndex };
+                    if (isStructuralTaxAggregateLabel(taxLabel)) {
+                        taxAggregates.push(taxMatch);
+                    } else {
+                        taxComponents.push(taxMatch);
+                    }
+                }
+            }
+
+            const hasPerShareBeforeCandidate = table.rows
+                .slice(pbt.rowIndex + 1, index)
+                .some(candidateRow =>
+                    /\b(?:basic|diluted|earnings per share|eps|per share)\b/.test(
+                        structuralLabel(candidateRow)
+                    )
+                );
+
+            if (hasPerShareBeforeCandidate) {
+                continue;
+            }
+
+            const nextLabels = table.rows
+                .slice(index + 1, range.endIndex)
+                .map(getRowLabel)
+                .filter(Boolean);
+            const beforePerShareRow = nextLabels.length === 0 ||
+                nextLabels.some(label =>
+                    /\b(?:basic|diluted|earnings per share|eps|per share)\b/.test(label)
+                );
+            const numericColumns = getNumericColumns(table, range);
+            const pbtValues = getRowPeriodValues(table, pbt.row, range);
+            const candidateValues = getRowPeriodValues(table, row, range);
+            const reconcilesWithTaxRows = taxRows => {
+                const taxValues = taxRows.map(taxRow =>
+                    getRowPeriodValues(table, taxRow.row, range)
+                );
+
+                return Boolean(
+                    pbtValues &&
+                    candidateValues &&
+                    taxValues.length > 0 &&
+                    taxValues.every(Boolean) &&
+                    candidateValues.every((value, valueIndex) =>
+                        reconcilesWithinNumericTolerance(
+                            value,
+                            pbtValues[valueIndex] - taxValues.reduce(
+                                (sum, values) => sum + values[valueIndex],
+                                0
+                            )
+                        )
+                    )
+                );
+            };
+            const aggregateTax = taxAggregates.find(aggregate =>
+                reconcilesWithTaxRows([aggregate])
+            );
+            const taxRows = aggregateTax
+                ? [aggregateTax]
+                : taxComponents;
+            const reconciled = reconcilesWithTaxRows(taxRows);
+
+            let score = 20;
+            score += taxRows.length > 0 ? 20 : 0;
+            score += taxRows.length > 1 ? 10 : 0;
+            score += beforePerShareRow ? 10 : 0;
+            score += reconciled ? 40 : 0;
+            score += numericColumns.length > 0 ? 5 : 0;
+
+            candidates.push({
+                row,
+                rowIndex: index,
+                score,
+                reconciled,
+                taxRows,
+                resolution: {
+                    method: "structural_resolution",
+                    reason: reconciled
+                        ? "profitAfterTaxReconciledToPbtAndTax"
+                        : "profitAfterTaxStructuralSequence",
+                    confidence: reconciled ? 0.96 : 0.78,
+                    reconciliation: reconciled
+                        ? {
+                            type: "pbt_minus_tax",
+                            taxSelection: aggregateTax ? "aggregate" : "components",
+                            taxRowIndexes: taxRows.map(taxRow => taxRow.rowIndex)
+                        }
+                        : null
+                }
+            });
+        }
+    }
+
+    candidates.sort((left, right) =>
+        right.score - left.score ||
+        Number(right.reconciled) - Number(left.reconciled) ||
+        left.rowIndex - right.rowIndex
+    );
+
+    const selected = candidates[0];
+    return selected && selected.score >= 70
+        ? selected
+        : null;
 }
 
 
@@ -745,6 +955,217 @@ function getMetricRole(config) {
             .toLowerCase();
 
     return role || "detail";
+}
+
+function getMetricConcept(config) {
+    if (!config || typeof config !== "object" || Array.isArray(config)) {
+        return null;
+    }
+
+    return String(config.concept ?? "").trim() || null;
+}
+
+function classifyFinancialConcept(label, sectionLabel = "") {
+    const text = canonicalizeMatchText(`${label} ${sectionLabel}`);
+
+    if (/\b(?:lease liability|lease liabilities|right to use)\b/.test(text)) {
+        return "leaseLiability";
+    }
+
+    if (/\b(?:non current asset(?:s)?|noncurrent asset(?:s)?)\b/.test(text)) {
+        return "nonCurrentAssets";
+    }
+
+    if (/\b(?:current asset(?:s)?)\b/.test(text)) {
+        return "currentAssets";
+    }
+
+    if (/\b(?:loan|loans)\b.*\b(?:advance|advances)\b/.test(text)) {
+        return "assets";
+    }
+
+    if (/\b(?:non current liabilit(?:y|ies)|noncurrent liabilit(?:y|ies))\b/.test(text)) {
+        return "nonCurrentLiabilities";
+    }
+
+    if (/\b(?:current liabilit(?:y|ies))\b/.test(text)) {
+        return "currentLiabilities";
+    }
+
+    if (/\b(?:trade payable|trade payables|provision|deferred tax liability|deferred tax liabilities|current tax liability|current tax liabilities|operating liability|operating liabilities|creditor|creditors|payable|payables)\b/.test(text)) {
+        return "operatingLiability";
+    }
+
+    if (/\b(?:borrowings?|interest bearing debt|term loan|vehicle loan|bank loan|debenture|bond|notes payable)\b/.test(text)) {
+        return "interestBearingDebt";
+    }
+
+    if (/\b(?:share capital|reserves?|surplus|retained earnings|shareholders? funds?|shareholders? equity|equity)\b/.test(text)) {
+        return "equity";
+    }
+
+    if (/\b(?:asset|assets|property|plant|equipment|inventory|inventories|receivable|receivables|cash|loan|loans|advance|advances)\b/.test(text)) {
+        return "assets";
+    }
+
+    if (/\b(?:liability|liabilities)\b/.test(text)) {
+        return "liabilities";
+    }
+
+    return null;
+}
+
+function conceptCompatible(concept, label, sectionLabel = "") {
+    if (!concept) {
+        return true;
+    }
+
+    const labelConcept = classifyFinancialConcept(label);
+    const sectionConcept = classifyFinancialConcept(sectionLabel);
+
+    const compatibleDetailConcepts = {
+        currentAssets: ["assets"],
+        nonCurrentAssets: ["assets"],
+        currentLiabilities: [
+            "interestBearingDebt",
+            "operatingLiability",
+            "leaseLiability"
+        ],
+        nonCurrentLiabilities: [
+            "interestBearingDebt",
+            "operatingLiability",
+            "leaseLiability"
+        ]
+    };
+
+    const labelSupportsConcept = labelConcept === concept ||
+        compatibleDetailConcepts[concept]?.includes(labelConcept);
+
+    if (labelConcept && !labelSupportsConcept) {
+        return false;
+    }
+
+    const sectionSupportsConcept = sectionConcept === concept ||
+        (sectionConcept === "liabilities" && [
+            "interestBearingDebt",
+            "operatingLiability"
+        ].includes(concept)) ||
+        (["currentLiabilities", "nonCurrentLiabilities"].includes(sectionConcept) && [
+            "interestBearingDebt",
+            "operatingLiability",
+            "leaseLiability"
+        ].includes(concept));
+
+    if (sectionConcept && !sectionSupportsConcept) {
+        return false;
+    }
+
+    return labelSupportsConcept || sectionSupportsConcept;
+}
+
+function isAggregateCandidateLabel(label) {
+    const normalized = canonicalizeMatchText(label);
+    return normalized === "total" ||
+        normalized === "subtotal" ||
+        normalized.startsWith("total ") ||
+        normalized.startsWith("subtotal ") ||
+        normalized.includes("aggregate");
+}
+
+function getSectionLabel(table, section) {
+    return getRowLabel(table.rows[section?.startIndex]) || "";
+}
+
+function getComponentValues(table, row, section) {
+    return getRowPeriodValues(table, row, section);
+}
+
+function findDebtComponentAggregate(table, config, metricsConfig, analyticsConfig) {
+    if (getMetricConcept(config) !== "interestBearingDebt") {
+        return null;
+    }
+
+    const sections = findConfiguredSections(table, analyticsConfig);
+    const structural = getStructuralAliases(config);
+    const ranges = sections.length > 0
+        ? sections
+        : structural.sectionAliases.map(alias => {
+            const startIndex = table.rows.findIndex(row =>
+                matchesAnyStructuralSection(getRowLabel(row), [alias])
+            );
+            return startIndex >= 0
+                ? { startIndex, endIndex: table.rows.length, aliases: [alias] }
+                : null;
+        }).filter(Boolean);
+    const candidates = [];
+
+    for (const section of ranges) {
+        const sectionLabel = getSectionLabel(table, section);
+        if (!conceptCompatible("liabilities", sectionLabel) &&
+            !/\b(?:liabilit|debt|borrow)/.test(sectionLabel)) {
+            continue;
+        }
+
+        for (let rowIndex = section.startIndex + 1; rowIndex < section.endIndex; rowIndex++) {
+            const row = table.rows[rowIndex];
+            const label = getRowLabel(row);
+
+            if (!label || !hasValidYearValues(table, row) ||
+                isAggregateCandidateLabel(label) ||
+                !conceptCompatible("interestBearingDebt", label, sectionLabel)) {
+                continue;
+            }
+
+            candidates.push({ row, rowIndex, section, values: getComponentValues(table, row, section) });
+        }
+    }
+
+    const components = candidates.filter(candidate => {
+        const childRows = candidates.filter(child =>
+            child.section === candidate.section &&
+            child.rowIndex > candidate.rowIndex &&
+            child.values
+        );
+        return !childRows.length || !valuesReconcile(
+            candidate.values,
+            childRows.reduce((sum, child) =>
+                sum.map((value, index) => value + child.values[index]),
+                childRows[0]?.values?.map(() => 0) ?? []
+            )
+        );
+    });
+
+    if (components.length === 0) {
+        return null;
+    }
+
+    const columns = getNumericColumns(table, components[0].section);
+    const totals = columns.map((_, valueIndex) =>
+        components.reduce((sum, component) => sum + component.values[valueIndex], 0)
+    );
+    const aggregateRow = [];
+    const rowWidth = Math.max(...components.map(component => component.row.length));
+    for (let columnIndex = 0; columnIndex < rowWidth; columnIndex++) {
+        const valueIndex = columns.indexOf(columnIndex);
+        aggregateRow.push({ text: valueIndex >= 0 ? String(totals[valueIndex]) : "" });
+    }
+    aggregateRow[0] = { text: "" };
+    aggregateRow.__analyticsResolution = {
+        method: "componentAggregate",
+        reason: "eligibleInterestBearingDebtComponents",
+        confidence: 0.93,
+        components: components.map(component => ({
+            rowIndex: component.rowIndex,
+            label: String(component.row?.[0]?.text ?? "").trim(),
+            values: Object.fromEntries(columns.map((column, index) => [
+                getColumnPeriodLabel(table, column),
+                component.values[index]
+            ])),
+            concept: "interestBearingDebt"
+        }))
+    };
+
+    return { row: aggregateRow, rowIndex: components[0].rowIndex, resolution: aggregateRow.__analyticsResolution };
 }
 
 
@@ -1025,6 +1446,10 @@ function isGenericSectionBoundary(
     const rawLabel = String(row?.[0]?.text ?? "").trim();
 
     if (!label || safeAggregateLabel(label)) {
+        return false;
+    }
+
+    if (hasNumericValue(row)) {
         return false;
     }
 
@@ -1448,7 +1873,8 @@ function findExplicitAggregateRow(
     table,
     aliases,
     role = "detail",
-    startIndex = 0
+    startIndex = 0,
+    concept = null
 ) {
     let bestMatch = null;
 
@@ -1469,6 +1895,13 @@ function findExplicitAggregateRow(
 
         const label =
             getRowLabel(row);
+
+        if (
+            concept &&
+            !conceptCompatible(concept, label)
+        ) {
+            continue;
+        }
 
         if (
             !matchesAnyAlias(
@@ -1604,9 +2037,10 @@ function isSubtotalValueShape(
     table,
     section,
     candidateIndex,
-    aggregateAliases
+    aggregateAliases,
+    concept = null
 ) {
-    const yearColumns = getDetectedYearColumns(table);
+    const yearColumns = getNumericColumns(table, section);
 
     if (yearColumns.length === 0) {
         return false;
@@ -1621,16 +2055,54 @@ function isSubtotalValueShape(
         return false;
     }
 
+    const components = getSubtotalComponents(
+        table,
+        section,
+        candidateIndex,
+        aggregateAliases,
+        concept
+    );
     const totals = yearColumns.map(() => 0);
-    let detailCount = 0;
+
+    for (const component of components) {
+        component.values.forEach((value, valueIndex) => {
+            totals[valueIndex] += value;
+        });
+    }
+
+    return (
+        components.length > 0 &&
+        candidateValues.every(
+            (value, valueIndex) =>
+                reconcilesWithinNumericTolerance(
+                    value,
+                    totals[valueIndex]
+                )
+        )
+    );
+}
+
+function getSubtotalComponents(
+    table,
+    section,
+    candidateIndex,
+    aggregateAliases,
+    concept = null
+) {
+    const yearColumns = getNumericColumns(table, section);
+    const sectionLabel = getSectionLabel(table, section);
+    const components = [];
 
     for (let index = section.startIndex + 1; index < candidateIndex; index++) {
         const row = table.rows[index];
         const label = getRowLabel(row);
 
+
         if (
             !label ||
-            isSectionAggregateLabel(label, aggregateAliases)
+            isSectionAggregateLabel(label, aggregateAliases) ||
+            isAggregateCandidateLabel(label) ||
+            !conceptCompatible(concept, label, sectionLabel)
         ) {
             continue;
         }
@@ -1643,22 +2115,10 @@ function isSubtotalValueShape(
             continue;
         }
 
-        detailCount++;
-        values.forEach((value, valueIndex) => {
-            totals[valueIndex] += value;
-        });
+        components.push({ row, rowIndex: index, values });
     }
 
-    return (
-        detailCount > 0 &&
-        candidateValues.every(
-            (value, valueIndex) =>
-                reconcilesWithinNumericTolerance(
-                    value,
-                    totals[valueIndex]
-                )
-        )
-    );
+    return components;
 }
 
 
@@ -1689,6 +2149,20 @@ function getNumericColumns(table, section) {
         .map(([columnIndex]) => columnIndex);
 }
 
+function getColumnPeriodLabel(table, columnIndex) {
+    const rows = [table?.headers, ...(table?.rows ?? [])];
+    for (const row of rows) {
+        const cell = row?.[columnIndex];
+        const label = String(cell?.text ?? cell ?? "");
+        const period = label.match(/\b20\d{2}\b/)?.[0];
+        if (period) {
+            return period;
+        }
+    }
+
+    return String(columnIndex);
+}
+
 
 function getRowPeriodValues(table, row, section) {
     const columns = getNumericColumns(table, section);
@@ -1716,7 +2190,8 @@ function findReconciliationEvidence(
     section,
     candidateIndex,
     statementBoundary,
-    metricsConfig
+    metricsConfig,
+    concept = null
 ) {
     if (statementBoundary < 0) {
         return null;
@@ -1745,6 +2220,18 @@ function findReconciliationEvidence(
 
     for (let rowIndex = 0; rowIndex < table.rows.length; rowIndex++) {
         if (rowIndex === candidateIndex || rowIndex === statementBoundary) {
+            continue;
+        }
+
+        if (
+            rowIndex <= section.startIndex ||
+            rowIndex >= section.endIndex ||
+            !conceptCompatible(
+                concept,
+                getRowLabel(table.rows[rowIndex]),
+                getSectionLabel(table, section)
+            )
+        ) {
             continue;
         }
 
@@ -1879,7 +2366,8 @@ function findStructuralUnlabeledSubtotal(
     table,
     section,
     metricsConfig,
-    aggregateAliases
+    aggregateAliases,
+    concept = null
 ) {
     const statementBoundary = findStatementTotalBoundary(
         table,
@@ -1917,14 +2405,25 @@ function findStructuralUnlabeledSubtotal(
             table,
             section,
             index,
-            aggregateAliases
+            aggregateAliases,
+            concept
         );
+        const subtotalComponents = valueShape
+            ? getSubtotalComponents(
+                table,
+                section,
+                index,
+                aggregateAliases,
+                concept
+            )
+            : [];
         const reconciliation = findReconciliationEvidence(
             table,
             section,
             index,
             statementBoundary,
-            metricsConfig
+            metricsConfig,
+            concept
         );
 
         if (!label) {
@@ -1946,6 +2445,21 @@ function findStructuralUnlabeledSubtotal(
                 safeAggregateLabel(
                     nextLabel,
                     aggregateAliases
+                ) ||
+                isStructuralSectionHeading(
+                    table.rows[nextMeaningfulIndex],
+                    [
+                        ...getAllSectionAliases(metricsConfig),
+                        "assets",
+                        "current assets",
+                        "non current assets",
+                        "liabilities",
+                        "current liabilities",
+                        "non current liabilities",
+                        "equity",
+                        "shareholders funds",
+                        "shareholders equity"
+                    ]
                 ) ||
                 (
                     statementBoundary >= 0 &&
@@ -1999,7 +2513,21 @@ function findStructuralUnlabeledSubtotal(
                 confidence: reconciliation ? 0.92 : 0.84,
                 reconciliation: reconciliation ?? {
                     reason: "section detail rows reconcile to subtotal"
-                }
+                },
+                components: subtotalComponents.map(component => ({
+                    rowIndex: component.rowIndex,
+                    label: getRowLabel(component.row),
+                    values: Object.fromEntries(
+                        getNumericColumns(table, section).map((column, valueIndex) => [
+                            getColumnPeriodLabel(table, column),
+                            component.values[valueIndex]
+                        ])
+                    ),
+                    concept: concept ?? classifyFinancialConcept(
+                        getRowLabel(component.row),
+                        getSectionLabel(table, section)
+                    )
+                }))
             }
         });
     }
@@ -2200,6 +2728,18 @@ function findStructuralMetricRow(
                 if (
                     label &&
                     hasNumericValue(row) &&
+                    !conceptCompatible(
+                        getMetricConcept(config),
+                        label,
+                        getSectionLabel(table, section)
+                    )
+                ) {
+                    continue;
+                }
+
+                if (
+                    label &&
+                    hasNumericValue(row) &&
                     isSectionAggregateLabel(
                         label,
                         allAggregateAliases
@@ -2335,10 +2875,6 @@ function findStructuralMetricRow(
                         isSectionAggregateLabel(
                             nextLabel,
                             sectionAggregateAliases
-                        ) &&
-                        !(
-                            statementBoundary >= 0 &&
-                            index >= statementBoundary - 1
                         )
                     ) {
                         blankNumericCandidate = {
@@ -2369,7 +2905,8 @@ function findStructuralMetricRow(
                         table,
                         section,
                         metricsConfig,
-                        sectionAggregateAliases
+                        sectionAggregateAliases,
+                        getMetricConcept(config)
                     );
 
                 if (role !== "statementtotal") {
@@ -2383,7 +2920,8 @@ function findStructuralMetricRow(
                     table,
                     section,
                     metricsConfig,
-                    sectionAggregateAliases
+                    sectionAggregateAliases,
+                    getMetricConcept(config)
                 );
             }
         }
@@ -2511,6 +3049,18 @@ function findStructuralMetricRow(
         if (
             label &&
             hasNumericValue(row) &&
+            !conceptCompatible(
+                getMetricConcept(config),
+                label,
+                getRowLabel(table.rows[sectionStart])
+            )
+        ) {
+            continue;
+        }
+
+        if (
+            label &&
+            hasNumericValue(row) &&
             isSectionAggregateLabel(
                 label,
                 allAggregateAliases
@@ -2599,7 +3149,8 @@ function findStructuralMetricRow(
                     endIndex: sectionEnd
                 },
                 metricsConfig,
-                sectionAggregateAliases
+                sectionAggregateAliases,
+                getMetricConcept(config)
             );
 
         return structuralSubtotal;
@@ -2634,13 +3185,44 @@ function findAggregateMetricRow(
         const explicitStatementTotal = findExplicitAggregateRow(
             table,
             aliases.filter(alias => canonicalizeMatchText(alias) !== "total"),
-            role
+            role,
+            0,
+            getMetricConcept(config)
         );
 
         if (explicitStatementTotal) {
             explicitStatementTotal.row.__analyticsResolution =
                 explicitStatementTotal.resolution;
             return explicitStatementTotal.row;
+        }
+    }
+
+    if (role === "aggregate") {
+        const explicitAggregate = findExplicitAggregateRow(
+            table,
+            aliases,
+            role,
+            0,
+            getMetricConcept(config)
+        );
+
+        if (explicitAggregate && conceptCompatible(
+            getMetricConcept(config),
+            getRowLabel(explicitAggregate.row)
+        )) {
+            explicitAggregate.row.__analyticsResolution = explicitAggregate.resolution;
+            return explicitAggregate.row;
+        }
+
+        const componentAggregate = findDebtComponentAggregate(
+            table,
+            config,
+            metricsConfig,
+            analyticsConfig
+        );
+
+        if (componentAggregate) {
+            return componentAggregate.row;
         }
     }
 
@@ -2664,7 +3246,9 @@ function findAggregateMetricRow(
             findExplicitAggregateRow(
                 table,
                 explicitAliases,
-                role
+                role,
+                0,
+                getMetricConcept(config)
             );
 
         if (explicit) {
@@ -3396,6 +3980,22 @@ function findMetricRows(
         }
 
         const structural = getStructuralAliases(config);
+
+        if (
+            !matchedRow &&
+            metricName === "profitAfterTax"
+        ) {
+            const structuralPat = findStructuralPatRow(
+                table,
+                metricsConfig,
+                analyticsConfig
+            );
+
+            if (structuralPat) {
+                matchedRow = structuralPat.row;
+                matchedRow.__analyticsResolution = structuralPat.resolution;
+            }
+        }
 
         if (
             !matchedRow &&

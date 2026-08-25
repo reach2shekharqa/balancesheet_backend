@@ -67,23 +67,23 @@ function createCanonicalFinancialSnapshot(financialAnalytics = {}) {
         : null;
     const periods = profitLoss.periods ?? balanceSheet.periods ?? {};
     const years = profitLoss.years ?? balanceSheet.years ?? [];
-    const sourceValues = (statement, key) =>
-        unifiedMetrics?.[key]?.values ??
-        statement?.metrics?.[key]?.values ??
+    const sourceMetric = (statement, key) =>
+        unifiedMetrics?.[key] ??
+        statement?.metrics?.[key] ??
         {};
-    const legacyValues = key => legacyMetrics?.[key]?.values ?? {};
+    const legacyMetric = key => legacyMetrics?.[key] ?? {};
 
     return {
         years,
         periods,
         profitLoss: Object.fromEntries(canonicalSources.profitLoss.map(key => [
             key,
-            legacyMetrics ? legacyValues(key) : sourceValues(profitLoss, key)
+            legacyMetrics ? legacyMetric(key) : sourceMetric(profitLoss, key)
         ])),
         balanceSheet: Object.fromEntries([
             ...canonicalSources.balanceSheet,
             ...(legacyMetrics ? ["longTermBorrowings", "shortTermBorrowings"] : [])
-        ].map(key => [key, legacyMetrics ? legacyValues(key) : sourceValues(balanceSheet, key)]))
+        ].map(key => [key, legacyMetrics ? legacyMetric(key) : sourceMetric(balanceSheet, key)]))
     };
 }
 
@@ -91,7 +91,12 @@ function snapshotMetrics(snapshot) {
     return Object.fromEntries([
         ...Object.entries(snapshot.profitLoss),
         ...Object.entries(snapshot.balanceSheet)
-    ].map(([key, values]) => [key, { values }]));
+    ].map(([key, metric]) => [key, {
+        values: metric?.values ?? {},
+        label: metric?.label ?? null,
+        source: metric?.source ?? null,
+        resolution: metric?.resolution ?? null
+    }]));
 }
 
 const keyMetricDependencies = {
@@ -178,12 +183,21 @@ function addCalculationDetails(keyMetrics, years, periods, metrics) {
         if (!definition) return [metricName, metric];
 
         const inputs = definition.inputs.map(input => {
-            const values = getMetricValues(metrics, input.key);
+            const metricInput = metrics?.[input.key] ?? {};
+            const values = metricInput.values ?? {};
             return {
                 key: input.key,
                 label: input.label,
                 currentValue: getNumericValue(values, currentPeriod),
-                previousValue: getNumericValue(values, previousPeriod)
+                previousValue: getNumericValue(values, previousPeriod),
+                ...(metricInput.source ? { source: metricInput.source } : {}),
+                ...(metricInput.resolution ? { resolution: metricInput.resolution } : {}),
+                ...((metricInput.resolution?.components ?? metricInput.source?.components)
+                    ? {
+                        components: metricInput.resolution?.components ??
+                            metricInput.source?.components
+                    }
+                    : {})
             };
         });
         const inputValue = (key, period) => {

@@ -18,6 +18,7 @@ export const assetsBreakdownConfig = {
     metrics: {
         totalNonCurrentAssets: {
             role: "sectionTotal",
+            concept: "nonCurrentAssets",
             aliases: [
                 "total non-current assets",
                 "total non current assets",
@@ -27,6 +28,7 @@ export const assetsBreakdownConfig = {
 
         totalCurrentAssets: {
             role: "sectionTotal",
+            concept: "currentAssets",
             aliases: [
                 "total current assets"
             ]
@@ -34,6 +36,7 @@ export const assetsBreakdownConfig = {
 
         totalAssets: {
             role: "statementTotal",
+            concept: "assets",
             aliases: [
                 "total assets"
             ]
