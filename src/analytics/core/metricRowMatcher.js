@@ -638,6 +638,29 @@ function getDetectedYearColumns(table) {
     return bestColumns;
 }
 
+function getPeriodValues(table, row, yearColumns) {
+    const directValues = yearColumns.map(columnIndex =>
+        getNumericCellValue(row?.[columnIndex])
+    );
+
+    if (directValues.every(value => value !== null)) {
+        return directValues;
+    }
+
+    if (!getRowLabel(row)) {
+        const shiftedValues = row
+            ?.slice(1)
+            .map(getNumericCellValue)
+            .filter(value => value !== null) ?? [];
+
+        if (shiftedValues.length === yearColumns.length) {
+            return shiftedValues;
+        }
+    }
+
+    return directValues;
+}
+
 
 const NUMERIC_RECONCILIATION_TOLERANCE = 0.01;
 
@@ -662,10 +685,8 @@ function hasValidYearValues(table, row) {
         return hasNumericValue(row);
     }
 
-    return yearColumns.every(
-        columnIndex =>
-            getNumericCellValue(row?.[columnIndex]) !== null
-    );
+    return getPeriodValues(table, row, yearColumns)
+        .every(value => value !== null);
 }
 
 
@@ -2166,9 +2187,7 @@ function getColumnPeriodLabel(table, columnIndex) {
 
 function getRowPeriodValues(table, row, section) {
     const columns = getNumericColumns(table, section);
-    const values = columns.map(columnIndex =>
-        getNumericCellValue(row?.[columnIndex])
-    );
+    const values = getPeriodValues(table, row, columns);
 
     return values.some(value => value === null)
         ? null
@@ -3310,6 +3329,60 @@ function findAggregateMetricRow(
         return structuralMatch.row;
     }
 
+    if (role === "statementtotal" && structural.sectionAliases?.length > 0) {
+        const sectionStart = table.rows.findIndex(row =>
+            matchesAnyStructuralSection(getRowLabel(row), structural.sectionAliases)
+        );
+        if (sectionStart >= 0) {
+            const sectionEnd = table.rows.findIndex((row, index) =>
+                index > sectionStart &&
+                matchesAnyStructuralSection(
+                    getRowLabel(row),
+                    getAllSectionAliases(metricsConfig)
+                )
+            );
+            const endIndex = sectionEnd >= 0 ? sectionEnd : table.rows.length;
+            const yearColumns = getNumericColumns(table, { startIndex: sectionStart, endIndex });
+            const reconciledSectionTotal = table.rows
+                .slice(sectionStart + 1, endIndex)
+                .map((row, offset) => ({ row, index: sectionStart + 1 + offset }))
+                .filter(candidate => !getRowLabel(candidate.row) && hasValidYearValues(table, candidate.row))
+                .find(candidate => {
+                    const candidateValues = getPeriodValues(table, candidate.row, yearColumns);
+                    const detailValues = table.rows
+                        .slice(sectionStart + 1, candidate.index)
+                        .filter(row => getRowLabel(row) && hasValidYearValues(table, row))
+                        .map(row => getPeriodValues(table, row, yearColumns));
+                    return detailValues.length > 0 && candidateValues.every((value, valueIndex) =>
+                        reconcilesWithinNumericTolerance(
+                            value,
+                            detailValues.reduce((sum, values) => sum + values[valueIndex], 0)
+                        )
+                    );
+                });
+            if (reconciledSectionTotal) {
+                reconciledSectionTotal.row.__analyticsResolution = {
+                    method: "structuralSubtotal",
+                    reason: "reconciledConfiguredSection",
+                    confidence: 0.9,
+                    reconciliation: { reason: "section detail rows reconcile to total" }
+                };
+                return reconciledSectionTotal.row;
+            }
+            const sectionTotal = findStructuralUnlabeledSubtotal(
+                table,
+                { startIndex: sectionStart, endIndex },
+                metricsConfig,
+                ["total", "subtotal"],
+                getMetricConcept(config)
+            );
+            if (sectionTotal?.row) {
+                sectionTotal.row.__analyticsResolution = sectionTotal.resolution;
+                return sectionTotal.row;
+            }
+        }
+    }
+
     if (role === "sectiontotal") {
         return null;
     }
@@ -3335,7 +3408,7 @@ function findAggregateMetricRow(
      * If semantic sections exist, search the
      * final section for the statement total.
      */
-    if (sections.length > 0) {
+    if (sections.length > 0 && structural.sectionAliases?.length === 0) {
         const section =
             sections[sections.length - 1];
 
@@ -3380,6 +3453,44 @@ function findAggregateMetricRow(
                 reconciliation: null
             };
             return lastAggregate;
+        }
+
+        const statementCandidates = [];
+        const lastSection = sections.at(-1);
+        for (let index = lastSection.startIndex + 1; index < lastSection.endIndex; index++) {
+            const row = table.rows[index];
+            if (!getRowLabel(row) && hasValidYearValues(table, row)) {
+                statementCandidates.push({ row, index });
+            }
+        }
+
+        const reconciledStatement = statementCandidates
+            .filter(candidate => isStatementTotalValueShape(
+                table,
+                sections,
+                candidate.index,
+                aliases
+            ))
+            .at(-1);
+
+        const statementCandidate = reconciledStatement ?? statementCandidates
+            .sort((left, right) =>
+                getContextValues(right.row).reduce((sum, value) => sum + value, 0) -
+                getContextValues(left.row).reduce((sum, value) => sum + value, 0)
+            )
+            .at(0);
+        if (statementCandidate) {
+            statementCandidate.row.__analyticsResolution = {
+                method: "statementTotal",
+                reason: reconciledStatement
+                    ? "reconciledUnlabelledStatementTotal"
+                    : "unlabelledStatementBoundaryTotal",
+                confidence: reconciledStatement ? 0.9 : 0.78,
+                reconciliation: reconciledStatement
+                    ? { reason: "statement detail rows reconcile to total" }
+                    : null
+            };
+            return statementCandidate.row;
         }
     }
 

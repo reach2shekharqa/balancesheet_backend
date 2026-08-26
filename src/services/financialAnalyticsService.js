@@ -427,31 +427,23 @@ function extractMetricValues(
 
 
     const values = {};
+    const yearEntries = Object.entries(years).filter(([, year]) => year);
+    const directValues = yearEntries.map(([columnIndex, year]) => ({
+        year,
+        value: parseFinancialNumber(match.row?.[columnIndex]?.text)
+    }));
+    const extractedValues = directValues.every(item => item.value !== null)
+        ? directValues
+        : !String(match.row?.[0]?.text ?? "").trim()
+            ? match.row.slice(1)
+                .map(cell => parseFinancialNumber(cell?.text))
+                .filter(value => value !== null)
+                .map((value, index) => ({ year: yearEntries[index]?.[1], value }))
+            : directValues;
 
-
-    match.row.forEach(
-        (cell, columnIndex) => {
-
-            const year =
-                years[columnIndex];
-
-            if (!year) {
-                return;
-            }
-
-
-            const value =
-                parseFinancialNumber(
-                    cell?.text
-                );
-
-
-            if (value !== null) {
-                values[year] = value;
-            }
-
-        }
-    );
+    extractedValues.forEach(({ year, value }) => {
+        if (year && value !== null) values[year] = value;
+    });
 
 
     return values;
@@ -463,19 +455,22 @@ function extractMetricSourceValues(match, years) {
     }
 
     const values = {};
+    const yearEntries = Object.entries(years).filter(([, year]) => year);
+    const directValues = yearEntries.map(([columnIndex, year]) => ({
+        year,
+        value: String(match.row?.[columnIndex]?.text ?? "").trim()
+    }));
+    const extractedValues = directValues.every(item => item.value !== "")
+        ? directValues
+        : !String(match.row?.[0]?.text ?? "").trim()
+            ? match.row.slice(1)
+                .map(cell => String(cell?.text ?? "").trim())
+                .filter(Boolean)
+                .map((value, index) => ({ year: yearEntries[index]?.[1], value }))
+            : directValues;
 
-    match.row.forEach((cell, columnIndex) => {
-        const year = years[columnIndex];
-
-        if (!year) {
-            return;
-        }
-
-        const sourceValue = String(cell?.text ?? "").trim();
-
-        if (sourceValue !== "") {
-            values[year] = sourceValue;
-        }
+    extractedValues.forEach(({ year, value }) => {
+        if (year && value !== "") values[year] = value;
     });
 
     return values;
