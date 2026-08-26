@@ -3,6 +3,7 @@ import express from "express";
 import {
     authenticateUser,
     authenticateGoogleUser,
+    createAuthToken,
     getAuthCookieOptions,
     normalizeEmail,
     registerUser,
