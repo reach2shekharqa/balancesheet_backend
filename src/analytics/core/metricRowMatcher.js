@@ -647,15 +647,13 @@ function getPeriodValues(table, row, yearColumns) {
         return directValues;
     }
 
-    if (!getRowLabel(row)) {
-        const shiftedValues = row
-            ?.slice(1)
-            .map(getNumericCellValue)
-            .filter(value => value !== null) ?? [];
+    const shiftedValues = row
+        ?.slice(1)
+        .map(getNumericCellValue)
+        .filter(value => value !== null) ?? [];
 
-        if (shiftedValues.length === yearColumns.length) {
-            return shiftedValues;
-        }
+    if (shiftedValues.length === yearColumns.length) {
+        return shiftedValues;
     }
 
     return directValues;
@@ -2427,7 +2425,26 @@ function findStructuralUnlabeledSubtotal(
             aggregateAliases,
             concept
         );
-        const subtotalComponents = valueShape
+        const candidateValues = getRowPeriodValues(table, row, section);
+        const detailValues = table.rows
+            .slice(section.startIndex + 1, index)
+            .filter(detailRow => {
+                const detailLabel = getRowLabel(detailRow);
+                return detailLabel &&
+                    hasValidYearValues(table, detailRow) &&
+                    !isAggregateCandidateLabel(detailLabel) &&
+                    conceptCompatible(concept, detailLabel, getSectionLabel(table, section));
+            })
+            .map(detailRow => getRowPeriodValues(table, detailRow, section));
+        const reconcilesToLabeledDetails = candidateValues && detailValues.length > 0 &&
+            detailValues.every(values => values) &&
+            candidateValues.every((value, valueIndex) =>
+                reconcilesWithinNumericTolerance(
+                    value,
+                    detailValues.reduce((sum, values) => sum + values[valueIndex], 0)
+                )
+            );
+        const subtotalComponents = valueShape || reconcilesToLabeledDetails
             ? getSubtotalComponents(
                 table,
                 section,
@@ -2486,8 +2503,8 @@ function findStructuralUnlabeledSubtotal(
                 );
 
             if (
-                !structurallyPositioned ||
-                (!valueShape && !reconciliation)
+                (!structurallyPositioned && !reconcilesToLabeledDetails) ||
+                (!valueShape && !reconciliation && !reconcilesToLabeledDetails)
             ) {
                 continue;
             }
@@ -2496,7 +2513,6 @@ function findStructuralUnlabeledSubtotal(
         const distanceToStatementTotal = statementBoundary >= 0
             ? statementBoundary - index
             : 0;
-        const candidateValues = getRowPeriodValues(table, row, section);
         const duplicateDetail = table.rows
             .slice(section.startIndex + 1, index)
             .some(detailRow => valuesReconcile(
@@ -2515,6 +2531,7 @@ function findStructuralUnlabeledSubtotal(
                 : 0;
         score += valueShape ? 10 : 0;
         score += reconciliation ? 40 : 0;
+        score += reconcilesToLabeledDetails ? 40 : 0;
         score -= duplicateDetail ? 20 : 0;
 
         candidates.push({
