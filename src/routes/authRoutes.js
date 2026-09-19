@@ -5,9 +5,12 @@ import {
     authenticateGoogleUser,
     createAuthToken,
     getAuthCookieOptions,
+    getCompanyProfileForUser,
     normalizeEmail,
     registerUser,
     toPublicUser,
+    updateUserEmail,
+    upsertCompanyProfile,
     validateRegistrationInput,
     AUTH_COOKIE_NAME,
 } from "../services/authService.js";
@@ -106,6 +109,72 @@ router.post("/google", async (req, res) => {
         const status = error?.code === "GOOGLE_TOKEN_INVALID" ? 401 : 500;
         console.error("Google login failed:", error?.message ?? error);
         return res.status(status).json({ success: false, error: error?.message ?? "Google login failed." });
+    }
+});
+
+router.get("/profile", requireAuth, async (req, res) => {
+    const companyId = req.query.companyId ? Number(req.query.companyId) : null;
+    if (!companyId) {
+        return res.status(400).json({ success: false, error: "A companyId is required." });
+    }
+
+    try {
+        const profile = await getCompanyProfileForUser({ userId: req.user.userId, companyId });
+        return res.json({ success: true, profile });
+    } catch (error) {
+        console.error("Load company profile failed:", error?.message ?? error);
+        return res.status(500).json({ success: false, error: error?.message ?? "Unable to load company profile." });
+    }
+});
+
+router.put("/profile", requireAuth, async (req, res) => {
+    const { companyId, companyName, constitution, kyc, kycValue, email, contactNumber, state, city, businessType, productType } = req.body ?? {};
+
+    if (!companyId) {
+        return res.status(400).json({ success: false, error: "A companyId is required." });
+    }
+
+    try {
+        const nextEmail = normalizeEmail(email ?? req.user.email);
+        const profile = await upsertCompanyProfile({
+            userId: req.user.userId,
+            companyId: Number(companyId),
+            profile: {
+                companyName,
+                constitution,
+                kyc,
+                kycValue,
+                email: nextEmail,
+                contactNumber,
+                state,
+                city,
+                businessType,
+                productType,
+            },
+        });
+
+        const currentEmail = normalizeEmail(req.user.email);
+        if (nextEmail && nextEmail !== currentEmail) {
+            const updatedUser = await updateUserEmail({ userId: req.user.userId, email: nextEmail });
+            if (!updatedUser) {
+                return res.status(400).json({ success: false, error: "Unable to update your email address." });
+            }
+
+            return res.json({
+                success: true,
+                profile,
+                user: await toPublicUser(updatedUser),
+            });
+        }
+
+        return res.json({ success: true, profile, user: req.user });
+    } catch (error) {
+        if (error?.code === "23505") {
+            return res.status(409).json({ success: false, error: "This email is already in use." });
+        }
+
+        console.error("Save company profile failed:", error?.message ?? error);
+        return res.status(500).json({ success: false, error: error?.message ?? "Unable to save company profile." });
     }
 });
 

@@ -690,21 +690,11 @@ return {
 }
 
 export function assertCompanyCin(document, authorization) {
-    if (authorization.type !== "COMPANY") return;
-    const identity = extractIdentityFromDocument(document);
-    if (!identity.cin || identity.cin !== String(authorization.companyCin).replace(/[\s:;,#|/\-]+/g, "").toUpperCase()) {
-        throw cinMismatch();
-    }
+    // CIN validation is intentionally disabled; company name is the only required registration field.
 }
 
 export function assertIndependentCin(document) {
-    const identity = extractIdentityFromDocument(document);
-    if (!identity.cin) {
-        const error = new Error("The uploaded document must contain a valid CIN.");
-        error.status = 400;
-        error.code = "DOCUMENT_CIN_REQUIRED";
-        throw error;
-    }
+    // CIN validation is intentionally disabled; uploads no longer require a CIN.
 }
 
 async function reserveQuotaOrThrow(userId) {

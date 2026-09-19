@@ -11,6 +11,7 @@ import adminRoutes from "./src/routes/adminRoutes.js";
 import ocrPocRoutes from "./src/routes/ocrPocRoutes.js";
 import { verifyOcrDependencies } from "./src/services/ocrPocService.js";
 import { permanentlyDeleteExpiredUsers } from "./src/services/adminService.js";
+import { ensureCompanyProfilesSchema } from "./src/db/db.js";
 
 dotenv.config();
 
@@ -130,52 +131,61 @@ app.use(
 const PORT =
     process.env.PORT || 3000;
 
-
-/* =========================================================
-   STARTUP DEBUG
-   ========================================================= */
-
-console.log("[SERVER] STARTING", {
-    port: PORT,
-    nodeEnv: process.env.NODE_ENV,
-    timestamp: new Date().toISOString(),
-});
-
-verifyOcrDependencies()
-    .then(() => console.log("[OCR POC] Tesseract and pdftoppm are available"))
-    .catch(error => console.error("[OCR POC] dependency verification failed:", error.message));
-
-
-/* =========================================================
-   HEALTH CHECK
-   ========================================================= */
-
-app.get("/health", (req, res) => {
-    res.json({
-        success: true,
-        message: "Backend is running",
-    });
-});
-
-
-/* =========================================================
-   LISTEN
-   ========================================================= */
-
-app.listen(PORT, () => {
-    console.log(
-        `Backend running on port ${PORT}`
-    );
-});
-
-const runRetentionCleanup = async () => {
+const startServer = async () => {
     try {
-        const deletedUsers = await permanentlyDeleteExpiredUsers();
-        if (deletedUsers > 0) console.log(`[RETENTION] Permanently deleted ${deletedUsers} expired user(s).`);
+        await ensureCompanyProfilesSchema();
+        console.log("[DB] Company profile schema ensured.");
     } catch (error) {
-        console.error("[RETENTION] Cleanup failed:", error?.message ?? error);
+        console.error("[DB] Company profile schema check failed:", error?.message ?? error);
+        process.exit(1);
     }
+
+    /* =========================================================
+       STARTUP DEBUG
+       ========================================================= */
+
+    console.log("[SERVER] STARTING", {
+        port: PORT,
+        nodeEnv: process.env.NODE_ENV,
+        timestamp: new Date().toISOString(),
+    });
+
+    verifyOcrDependencies()
+        .then(() => console.log("[OCR POC] Tesseract and pdftoppm are available"))
+        .catch(error => console.error("[OCR POC] dependency verification failed:", error.message));
+
+    /* =========================================================
+       HEALTH CHECK
+       ========================================================= */
+
+    app.get("/health", (req, res) => {
+        res.json({
+            success: true,
+            message: "Backend is running",
+        });
+    });
+
+    /* =========================================================
+       LISTEN
+       ========================================================= */
+
+    app.listen(PORT, () => {
+        console.log(
+            `Backend running on port ${PORT}`
+        );
+    });
+
+    const runRetentionCleanup = async () => {
+        try {
+            const deletedUsers = await permanentlyDeleteExpiredUsers();
+            if (deletedUsers > 0) console.log(`[RETENTION] Permanently deleted ${deletedUsers} expired user(s).`);
+        } catch (error) {
+            console.error("[RETENTION] Cleanup failed:", error?.message ?? error);
+        }
+    };
+
+    runRetentionCleanup();
+    setInterval(runRetentionCleanup, 60 * 60 * 1000);
 };
 
-runRetentionCleanup();
-setInterval(runRetentionCleanup, 60 * 60 * 1000);
+startServer();
