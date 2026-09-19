@@ -31,6 +31,12 @@ test('upsertCompanyProfile syncs profile metadata back to the company record use
         };
       }
 
+      if (sql.includes('UPDATE public.companies')) {
+        return {
+          rows: [{ id: 7, company_name: 'Acme Solutions', cin: 'U65999MH2024PTC123456', pan: '' }]
+        };
+      }
+
       return { rowCount: 0, rows: [] };
     }
   };
@@ -52,6 +58,8 @@ test('upsertCompanyProfile syncs profile metadata back to the company record use
   }, db);
 
   assert.equal(result.companyName, 'Acme Solutions');
+  assert.equal(result.cin, 'U65999MH2024PTC123456');
+  assert.equal(result.pan, '');
 
   const companyUpdate = calls.find(({ sql }) => sql.includes('UPDATE public.companies'));
   assert.ok(companyUpdate, 'Expected company metadata to be synced back to the companies table.');

@@ -167,7 +167,16 @@ router.put("/profile", requireAuth, async (req, res) => {
             });
         }
 
-        return res.json({ success: true, profile, user: req.user });
+        return res.json({
+            success: true,
+            profile,
+            user: await toPublicUser({
+                user_id: req.user.userId,
+                user_name: req.user.userName,
+                email: nextEmail,
+                role: req.user.role,
+            }),
+        });
     } catch (error) {
         if (error?.code === "23505") {
             return res.status(409).json({ success: false, error: "This email is already in use." });

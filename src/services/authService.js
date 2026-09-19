@@ -245,6 +245,8 @@ export async function upsertCompanyProfile({ userId, companyId, profile }, db = 
 
     return {
         ...result.rows[0],
+        cin: companyUpdate.rows[0]?.cin ?? "",
+        pan: companyUpdate.rows[0]?.pan ?? "",
         companyUpdate: companyUpdate.rows[0] ?? null,
     };
 }
