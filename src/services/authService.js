@@ -178,6 +178,8 @@ export async function upsertCompanyProfile({ userId, companyId, profile }, db = 
     const contactNumber = normalizeText(profile?.contactNumber, "");
     const state = normalizeText(profile?.state, "");
     const city = normalizeText(profile?.city, "");
+    const normalizedCin = kycType === "CIN" ? normalizeCompanyValue(kycValue) : null;
+    const normalizedPan = kycType === "PAN" ? normalizeCompanyValue(kycValue) : null;
 
     const result = await db.query(
         `
@@ -223,7 +225,24 @@ export async function upsertCompanyProfile({ userId, companyId, profile }, db = 
         [companyId, companyName, constitution, kycType, kycValue, email, contactNumber, state, city, businessType, productType]
     );
 
-    return result.rows[0];
+    const companyUpdate = await db.query(
+        `
+        UPDATE public.companies
+        SET company_name = COALESCE(NULLIF($2, ''), company_name),
+            cin = CASE WHEN $3 IS NOT NULL AND $3 <> '' THEN $3 ELSE cin END,
+            pan = CASE WHEN $4 IS NOT NULL AND $4 <> '' THEN $4 ELSE pan END,
+            normalized_company_name = COALESCE(NULLIF($5, ''), normalized_company_name),
+            updated_at = NOW()
+        WHERE id = $1
+        RETURNING id, company_name, cin, pan
+        `,
+        [companyId, companyName, normalizedCin, normalizedPan, companyName ? companyName.toUpperCase() : null]
+    );
+
+    return {
+        ...result.rows[0],
+        companyUpdate: companyUpdate.rows[0] ?? null,
+    };
 }
 
 export async function registerUser({ userName, email, password, companyName, cin, pan, registrationIntent = "owner" }, db = pool) {
