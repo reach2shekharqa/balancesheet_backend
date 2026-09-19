@@ -140,6 +140,25 @@ export async function updateUserEmail({ userId, email }, db = pool) {
         return null;
     }
 
+    const currentUser = await db.query(
+        `
+        SELECT user_id, user_name, email, role, is_active, is_deleted
+        FROM users
+        WHERE user_id = $1
+        LIMIT 1
+        `,
+        [userId]
+    );
+    const existingUser = currentUser.rows[0];
+
+    if (!existingUser) {
+        return null;
+    }
+
+    if (normalizeEmail(existingUser.email) === normalizedEmail) {
+        return existingUser;
+    }
+
     const result = await db.query(
         `
         UPDATE users
@@ -233,7 +252,7 @@ export async function upsertCompanyProfile({ userId, companyId, profile }, db = 
         `
         UPDATE public.companies
         SET company_name = $2,
-            cin = $3,
+            cin = CASE WHEN NULLIF($3, '') IS NOT NULL THEN $3 ELSE cin END,
             pan = $4,
             normalized_company_name = $5,
             updated_at = NOW()
