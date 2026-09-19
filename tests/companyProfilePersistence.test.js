@@ -58,6 +58,61 @@ test('upsertCompanyProfile syncs profile metadata back to the company record use
   assert.equal(companyUpdate.params[0], 7);
   assert.equal(companyUpdate.params[1], 'Acme Solutions');
   assert.equal(companyUpdate.params[2], 'U65999MH2024PTC123456');
-  assert.equal(companyUpdate.params[3], null);
+  assert.equal(companyUpdate.params[3], '');
   assert.equal(companyUpdate.params[4], 'ACME SOLUTIONS');
+});
+
+test('upsertCompanyProfile accepts blank optional fields and clears stale values', async () => {
+  const calls = [];
+  const db = {
+    async query(sql, params = []) {
+      calls.push({ sql, params });
+
+      if (sql.includes('SELECT 1 FROM company_users')) {
+        return { rowCount: 1, rows: [{ exists: true }] };
+      }
+
+      if (sql.includes('INSERT INTO company_profiles')) {
+        return {
+          rows: [{
+            companyId: 7,
+            companyName: '',
+            constitution: 'Proprietorship',
+            kyc: 'PAN',
+            kycValue: '',
+            email: '',
+            contactNumber: '',
+            state: '',
+            city: '',
+            businessType: 'Trader',
+            productType: ''
+          }]
+        };
+      }
+
+      return { rowCount: 0, rows: [] };
+    }
+  };
+
+  await upsertCompanyProfile({
+    userId: 'usr_456',
+    companyId: 7,
+    profile: {
+      companyName: '',
+      constitution: 'Proprietorship',
+      kyc: 'PAN',
+      kycValue: '',
+      email: '',
+      contactNumber: '',
+      state: '',
+      city: '',
+      businessType: 'Trader',
+      productType: ''
+    }
+  }, db);
+
+  const companyUpdate = calls.find(({ sql }) => sql.includes('UPDATE public.companies'));
+  assert.ok(companyUpdate, 'Expected company metadata sync even when fields are blank.');
+  assert.equal(companyUpdate.params[1], '');
+  assert.equal(companyUpdate.params[4], '');
 });

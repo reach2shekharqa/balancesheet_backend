@@ -95,8 +95,12 @@ function normalizeCompanyValue(value) {
 }
 
 function normalizeText(value, fallback = "") {
-    const text = String(value ?? "").trim();
-    return text || fallback;
+    if (value === undefined || value === null) {
+        return fallback;
+    }
+
+    const text = String(value).trim();
+    return text;
 }
 
 export async function getCompanyProfileForUser({ userId, companyId }, db = pool) {
@@ -228,15 +232,15 @@ export async function upsertCompanyProfile({ userId, companyId, profile }, db = 
     const companyUpdate = await db.query(
         `
         UPDATE public.companies
-        SET company_name = COALESCE(NULLIF($2, ''), company_name),
-            cin = CASE WHEN $3 IS NOT NULL AND $3 <> '' THEN $3 ELSE cin END,
-            pan = CASE WHEN $4 IS NOT NULL AND $4 <> '' THEN $4 ELSE pan END,
-            normalized_company_name = COALESCE(NULLIF($5, ''), normalized_company_name),
+        SET company_name = $2,
+            cin = $3,
+            pan = $4,
+            normalized_company_name = $5,
             updated_at = NOW()
         WHERE id = $1
         RETURNING id, company_name, cin, pan
         `,
-        [companyId, companyName, normalizedCin, normalizedPan, companyName ? companyName.toUpperCase() : null]
+        [companyId, companyName, normalizedCin ?? "", normalizedPan ?? "", companyName ? companyName.toUpperCase() : ""]
     );
 
     return {
