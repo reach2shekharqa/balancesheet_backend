@@ -387,6 +387,70 @@ async function processDocumentUploadPipeline({
             assertCompanyCin(cache.document, authorization);
             assertIndependentCin(cache.document);
 
+            if (authorization.type === "COMPANY" && cache.document.company_id === null) {
+                const claimedDocument = await pool.query(
+                    `
+                    UPDATE documents
+                    SET company_id = $2
+                    WHERE id = $1
+                      AND company_id IS NULL
+                    RETURNING
+                        id,
+                        file_hash,
+                        user_id,
+                        original_filename,
+                        company_id,
+                        extraction_status,
+                        extraction_payload,
+                        created_at
+                    `,
+                    [cache.document.id, authorization.companyId]
+                );
+
+                if (claimedDocument.rows[0]) {
+                    cache.document = claimedDocument.rows[0];
+                } else {
+                    throw new Error("The cached document is already assigned to another company.");
+                }
+            } else if (authorization.type === "COMPANY" && String(cache.document.company_id) !== String(authorization.companyId)) {
+                const companyDocument = await pool.query(
+                    `
+                    INSERT INTO documents (
+                        file_hash,
+                        document_version,
+                        original_filename,
+                        reporting_unit,
+                        extraction_status,
+                        extraction_payload,
+                        user_id,
+                        company_id
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    RETURNING
+                        id,
+                        file_hash,
+                        user_id,
+                        original_filename,
+                        company_id,
+                        extraction_status,
+                        extraction_payload,
+                        created_at
+                    `,
+                    [
+                        cache.document.file_hash,
+                        cache.document.document_version ?? 1,
+                        cache.document.original_filename,
+                        cache.document.reporting_unit ?? null,
+                        cache.document.extraction_status,
+                        cache.document.extraction_payload,
+                        userId,
+                        authorization.companyId,
+                    ]
+                );
+
+                cache.document = companyDocument.rows[0];
+            }
+
             removeUploadedFile(fileInfo.filePath);
             await linkDocumentToUser({ userId, documentId: cache.document.id });
 

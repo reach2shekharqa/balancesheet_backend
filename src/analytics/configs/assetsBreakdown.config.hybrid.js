@@ -12,6 +12,11 @@ export const assetsBreakdownConfig = {
                 "current assets",
                 "current asset"
             ]
+        ],
+        excludedSignals: [
+            "statement of cash flows",
+            "cash flows from",
+            "cash flow statement"
         ]
     },
 

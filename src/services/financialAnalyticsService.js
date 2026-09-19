@@ -59,74 +59,62 @@ const analyticsConfigLoaders = {
 
 
 /* =========================================================
-   DETECT CONTENT TYPE
-   ========================================================= */
-
-/**
- * Detect whether content contains Markdown tables or HTML tables.
- *
- * Returns:
- *   "markdown"
- *   "html"
- */
-function detectContentType(content) {
-
-    /*
-     * HTML is more specific, so check it first.
-     */
-    if (
-        /<table\b[^>]*>[\s\S]*?<\/table>/i
-            .test(content)
-    ) {
-        return "html";
-    }
-
-    const lines =
-        content.split(/\r?\n/);
-
-    for (
-        let i = 0;
-        i < lines.length - 1;
-        i++
-    ) {
-
-        if (!lines[i].includes("|")) {
-            continue;
-        }
-
-        const nextLine =
-            lines[i + 1];
-
-        if (
-            /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/
-                .test(nextLine)
-        ) {
-            return "markdown";
-        }
-    }
-
-
-    /*
-     * Preserve previous fallback.
-     */
-    return "html";
-}
-
-
-/* =========================================================
    EXTRACT TABLES
    ========================================================= */
 
 function extractTablesFromContent(content) {
+    const markdownTables = mergeMarkdownContinuationTables(
+        parseMarkdownTables(content)
+    );
+    const htmlTables = extractHtmlTables(content);
+    const tables = [...markdownTables, ...htmlTables];
 
-    const contentType =
-        detectContentType(content);
+    return tables.map((table, tableIndex) => ({
+        ...table,
+        tableIndex
+    }));
+}
 
-    if (contentType === "markdown") {
-        return parseMarkdownTables(content);
+function looksLikeContinuationHeader(table) {
+    const header = table?.headers ?? [];
+    const label = String(header[0]?.text ?? "").trim();
+    const numericCells = header.slice(1).filter(cell =>
+        /^[-+]?\(?\d[\d,]*(?:\.\d+)?\)?$/.test(String(cell?.text ?? "").trim())
+    );
+
+    return Boolean(label) && numericCells.length > 0;
+}
+
+function mergeMarkdownContinuationTables(tables) {
+    const merged = [];
+
+    for (const table of tables) {
+        const previous = merged.at(-1);
+        const sameStatementShape = previous &&
+            table.startLine - previous.endLine <= 20 &&
+            table.columnCount <= previous.columnCount &&
+            looksLikeContinuationHeader(table);
+
+        if (!sameStatementShape) {
+            merged.push({ ...table });
+            continue;
+        }
+
+        const width = previous.columnCount;
+        const continuationRows = [table.headers, ...table.rows].map(row => {
+            const cells = row.map(cell => ({ ...cell }));
+            while (cells.length < width) {
+                cells.push({ text: "" });
+            }
+            return cells.slice(0, width);
+        });
+
+        previous.rows.push(...continuationRows);
+        previous.endLine = table.endLine;
+        previous.rowCount = previous.rows.length;
     }
 
-    return extractHtmlTables(content);
+    return merged;
 }
 
  function detectReportingUnit(table, content = "") {

@@ -1250,6 +1250,7 @@ function normalizeSectionLabel(value) {
             /^(?:[ivxlcdm]+|\d+|[a-z])\s+/i,
             ""
         )
+        .replace(/\s+abstract$/, "")
         .trim();
 }
 

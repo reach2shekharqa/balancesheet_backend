@@ -95,6 +95,24 @@ export function scoreTable(table, config) {
         config?.tableSelection?.preferred ??
         []
     );
+    const excludedSignals = flattenSignals(
+        config?.tableSelection?.excludedSignals ??
+        config?.tableSelection?.excluded ??
+        []
+    );
+
+    const excludedMatch = excludedSignals.some(signal => text.includes(signal));
+    if (excludedMatch) {
+        return {
+            tableIndex: table.tableIndex,
+            score: 0,
+            requiredMatches: 0,
+            requiredCount: requiredSignals.length,
+            preferredMatches: 0,
+            preferredCount: preferredSignals.length,
+            metricCoverage: 0
+        };
+    }
 
     const requiredSignalGroups = getSignalGroups(
         config?.tableSelection?.requiredSignals ??

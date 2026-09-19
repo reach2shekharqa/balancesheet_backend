@@ -11,6 +11,11 @@ export const liabilitiesBreakdownConfig = {
             [
                 "current liabilities"
             ]
+        ],
+        excludedSignals: [
+            "statement of cash flows",
+            "cash flows from",
+            "cash flow statement"
         ]
     },
 
