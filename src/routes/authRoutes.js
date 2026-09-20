@@ -182,6 +182,10 @@ router.put("/profile", requireAuth, async (req, res) => {
             return res.status(409).json({ success: false, error: "This email is already in use." });
         }
 
+        if (error?.code === "COMPANY_CIN_CONFLICT") {
+            return res.status(409).json({ success: false, error: error.message });
+        }
+
         console.error("Save company profile failed:", error?.message ?? error);
         return res.status(500).json({ success: false, error: error?.message ?? "Unable to save company profile." });
     }

@@ -124,3 +124,68 @@ test('upsertCompanyProfile accepts blank optional fields and clears stale values
   assert.equal(companyUpdate.params[1], '');
   assert.equal(companyUpdate.params[4], '');
 });
+
+test('upsertCompanyProfile removes an unreferenced duplicate company before changing CIN', async () => {
+  const calls = [];
+  const db = {
+    async query(sql, params = []) {
+      calls.push({ sql, params });
+
+      if (sql.includes('SELECT 1 FROM company_users')) {
+        return { rowCount: 1, rows: [{ exists: true }] };
+      }
+
+      if (sql.includes('WHERE c.cin = $1 AND c.id <> $2')) {
+        return { rowCount: 1, rows: [{ id: 3, member_count: 0, document_count: 0, profile_count: 0 }] };
+      }
+
+      if (sql.includes('INSERT INTO company_profiles')) {
+        return { rows: [{ companyId: 22, companyName: 'Dynamic', kyc: 'CIN', kycValue: 'L31300RJ2007PLC024139' }] };
+      }
+
+      if (sql.includes('UPDATE public.companies')) {
+        return { rows: [{ id: 22, company_name: 'Dynamic', cin: 'L31300RJ2007PLC024139', pan: '' }] };
+      }
+
+      return { rowCount: 0, rows: [] };
+    }
+  };
+
+  const result = await upsertCompanyProfile({
+    userId: 'usr_123',
+    companyId: 22,
+    profile: {
+      companyName: 'Dynamic',
+      kyc: 'CIN',
+      kycValue: 'L31300RJ2007PLC024139'
+    }
+  }, db);
+
+  assert.equal(result.cin, 'L31300RJ2007PLC024139');
+  assert.ok(calls.some(({ sql, params }) => sql.includes('DELETE FROM public.companies') && params[0] === 3));
+});
+
+test('upsertCompanyProfile rejects a CIN assigned to a referenced company', async () => {
+  const db = {
+    async query(sql) {
+      if (sql.includes('SELECT 1 FROM company_users')) {
+        return { rowCount: 1, rows: [{ exists: true }] };
+      }
+
+      if (sql.includes('WHERE c.cin = $1 AND c.id <> $2')) {
+        return { rowCount: 1, rows: [{ id: 3, member_count: 1, document_count: 0, profile_count: 1 }] };
+      }
+
+      return { rowCount: 0, rows: [] };
+    }
+  };
+
+  await assert.rejects(
+    upsertCompanyProfile({
+      userId: 'usr_123',
+      companyId: 22,
+      profile: { companyName: 'Dynamic', kyc: 'CIN', kycValue: 'L31300RJ2007PLC024139' }
+    }, db),
+    error => error.code === 'COMPANY_CIN_CONFLICT'
+  );
+});

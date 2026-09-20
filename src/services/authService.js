@@ -204,6 +204,35 @@ export async function upsertCompanyProfile({ userId, companyId, profile }, db = 
     const normalizedCin = kycType === "CIN" ? normalizeCompanyValue(kycValue) : null;
     const normalizedPan = kycType === "PAN" ? normalizeCompanyValue(kycValue) : null;
 
+    if (normalizedCin) {
+        const conflictingCompany = await db.query(
+            `
+            SELECT c.id,
+                   (SELECT COUNT(*)::int FROM company_users WHERE company_id = c.id) AS member_count,
+                   (SELECT COUNT(*)::int FROM documents WHERE company_id = c.id) AS document_count,
+                   (SELECT COUNT(*)::int FROM company_profiles WHERE company_id = c.id) AS profile_count
+            FROM public.companies c
+            WHERE c.cin = $1 AND c.id <> $2
+            LIMIT 1
+            `,
+            [normalizedCin, companyId]
+        );
+
+        const duplicate = conflictingCompany.rows[0];
+        if (duplicate) {
+            const hasReferences = [duplicate.member_count, duplicate.document_count, duplicate.profile_count]
+                .some(count => Number(count) > 0);
+
+            if (hasReferences) {
+                const error = new Error("This CIN is already assigned to another company.");
+                error.code = "COMPANY_CIN_CONFLICT";
+                throw error;
+            }
+
+            await db.query(`DELETE FROM public.companies WHERE id = $1`, [duplicate.id]);
+        }
+    }
+
     const result = await db.query(
         `
         INSERT INTO company_profiles (
