@@ -112,6 +112,8 @@ export async function getCompanyProfileForUser({ userId, companyId }, db = pool)
         `
         SELECT cp.company_id AS "companyId",
                c.company_name AS "companyName",
+                             c.cin,
+                             c.pan,
                cp.constitution,
                cp.kyc_type AS "kyc",
                cp.kyc_value AS "kycValue",
@@ -208,6 +210,7 @@ export async function upsertCompanyProfile({ userId, companyId, profile }, db = 
         const conflictingCompany = await db.query(
             `
             SELECT c.id,
+                     c.company_name,
                    (SELECT COUNT(*)::int FROM company_users WHERE company_id = c.id) AS member_count,
                    (SELECT COUNT(*)::int FROM documents WHERE company_id = c.id) AS document_count,
                    (SELECT COUNT(*)::int FROM company_profiles WHERE company_id = c.id) AS profile_count
@@ -224,7 +227,7 @@ export async function upsertCompanyProfile({ userId, companyId, profile }, db = 
                 .some(count => Number(count) > 0);
 
             if (hasReferences) {
-                const error = new Error("This CIN is already assigned to another company.");
+                const error = new Error("This CIN is being used by another company. Please enter your own CIN.");
                 error.code = "COMPANY_CIN_CONFLICT";
                 throw error;
             }

@@ -173,7 +173,7 @@ test('upsertCompanyProfile rejects a CIN assigned to a referenced company', asyn
       }
 
       if (sql.includes('WHERE c.cin = $1 AND c.id <> $2')) {
-        return { rowCount: 1, rows: [{ id: 3, member_count: 1, document_count: 0, profile_count: 1 }] };
+        return { rowCount: 1, rows: [{ id: 3, company_name: 'Existing Company', member_count: 1, document_count: 0, profile_count: 1 }] };
       }
 
       return { rowCount: 0, rows: [] };
@@ -187,5 +187,6 @@ test('upsertCompanyProfile rejects a CIN assigned to a referenced company', asyn
       profile: { companyName: 'Dynamic', kyc: 'CIN', kycValue: 'L31300RJ2007PLC024139' }
     }, db),
     error => error.code === 'COMPANY_CIN_CONFLICT'
+      && error.message === 'This CIN is being used by another company. Please enter your own CIN.'
   );
 });
