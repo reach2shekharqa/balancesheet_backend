@@ -1269,6 +1269,64 @@ function splitNestedConfiguredSections(table, analyticsConfig, sections) {
     });
 }
 
+function getHierarchyMarker(label) {
+    const match = String(label ?? "").match(/^\s*(?:\(\s*([^)]*)\s*\)|([a-z]+|\d+)[.)])\s+/i);
+    const marker = String(match?.[1] ?? match?.[2] ?? "").trim();
+
+    if (!marker) {
+        return null;
+    }
+
+    const normalized = marker.toLowerCase();
+    if (/^[ivxlcm]+$/.test(normalized)) {
+        return { marker, level: 2 };
+    }
+
+    if (/^[a-z]+$/.test(normalized)) {
+        return { marker, level: 1 };
+    }
+
+    if (/^\d+$/.test(normalized)) {
+        return { marker, level: 1 };
+    }
+
+    return null;
+}
+
+export function annotateSectionRows(section) {
+    const lastRowsByLevel = new Map();
+
+    return section.rows.map((row, rowOffset) => {
+        const marker = getHierarchyMarker(row.label);
+        const hierarchyLevel = marker?.level ?? 1;
+        const parent = hierarchyLevel > 1
+            ? lastRowsByLevel.get(hierarchyLevel - 1) ?? null
+            : null;
+
+        for (const level of [...lastRowsByLevel.keys()]) {
+            if (level >= hierarchyLevel) {
+                lastRowsByLevel.delete(level);
+            }
+        }
+
+        const hierarchyPath = [
+            ...(parent?.hierarchyPath ?? [section.sectionId]),
+            row.rowIndex
+        ];
+        const annotatedRow = {
+            ...row,
+            hierarchyLevel,
+            hierarchyMarker: marker?.marker ?? null,
+            parentRowIndex: parent?.rowIndex ?? null,
+            hierarchyPath,
+            statementOrder: rowOffset
+        };
+
+        lastRowsByLevel.set(hierarchyLevel, annotatedRow);
+        return annotatedRow;
+    });
+}
+
 
 function buildAnalyticsDataset(
     sections,
@@ -1302,8 +1360,9 @@ function buildAnalyticsDataset(
 
     return sections.flatMap(section => {
         const resolvedRows = [];
+        const hierarchyRows = annotateSectionRows(section);
 
-        return section.rows.map(row => {
+        return hierarchyRows.map(row => {
             const metric =
                 metricsByRowIndex.get(row.rowIndex);
 
@@ -1356,6 +1415,11 @@ function buildAnalyticsDataset(
                 sourceRowIndex: row.rowIndex,
                 label: row.label,
                 sourceRowLabel: row.label,
+                hierarchyLevel: row.hierarchyLevel,
+                hierarchyMarker: row.hierarchyMarker,
+                parentRowIndex: row.parentRowIndex,
+                hierarchyPath: row.hierarchyPath,
+                statementOrder: row.statementOrder,
                 values: row.values,
                 sourceTotal: section.sourceTotal ?? null,
                 percentages,

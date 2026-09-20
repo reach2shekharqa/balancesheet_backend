@@ -14,11 +14,14 @@ function getAnalysisYears(years) {
 }
 
 function getNumericValue(values, year) {
-    if (!year || values?.[year] === null || values?.[year] === undefined || values?.[year] === "") {
+    const matchingYear = Object.keys(values ?? {}).find(key => String(key) === String(year))
+        ?? Object.keys(values ?? {}).find(key => String(key).includes(String(year ?? "")));
+
+    if (!year || values?.[matchingYear] === null || values?.[matchingYear] === undefined || values?.[matchingYear] === "") {
         return null;
     }
 
-    const value = Number(values[year]);
+    const value = Number(values[matchingYear]);
     return Number.isFinite(value) ? value : null;
 }
 
@@ -461,10 +464,10 @@ export function calculateRevenueGrowth({ years, periods, metrics }) {
         label: "Revenue Growth",
         currentPeriod,
         currentYear: currentPeriod,
-        currentValue,
+        currentValue: roundedValue,
         previousPeriod,
         previousYear: previousPeriod,
-        previousValue,
+        previousValue: null,
         change: roundedValue,
         changeType: "growth_percent",
         value: roundedValue,
@@ -683,11 +686,11 @@ export function calculateKeyMetrics(financialAnalytics) {
         },
         profitLoss: Object.fromEntries(canonicalSources.profitLoss.map(key => [
             key,
-            [getNumericValue(snapshot.profitLoss[key], resolvedPeriods.currentPeriod), getNumericValue(snapshot.profitLoss[key], resolvedPeriods.previousPeriod)]
+            [getNumericValue(getMetricValues(snapshot.profitLoss, key), resolvedPeriods.currentPeriod), getNumericValue(getMetricValues(snapshot.profitLoss, key), resolvedPeriods.previousPeriod)]
         ])),
         balanceSheet: Object.fromEntries(canonicalSources.balanceSheet.map(key => [
             key,
-            [getNumericValue(snapshot.balanceSheet[key], resolvedPeriods.currentPeriod), getNumericValue(snapshot.balanceSheet[key], resolvedPeriods.previousPeriod)]
+            [getNumericValue(getMetricValues(snapshot.balanceSheet, key), resolvedPeriods.currentPeriod), getNumericValue(getMetricValues(snapshot.balanceSheet, key), resolvedPeriods.previousPeriod)]
         ])),
         calculated: Object.fromEntries(Object.entries(result).map(([key, metric]) => [key, metric.status === "calculated" ? metric.value : metric.status]))
     }));
